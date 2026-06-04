@@ -6,14 +6,17 @@
   "main": "main.js",
   "homepage": "./",
   "dependencies": {
+    "@twilio/voice-sdk": "^2.18.3",
     "electron-is-dev": "^1.1.0"
   },
   "scripts": {
-    "start": "electron main.js",
+    "start": "electron .",
     "dev": "BROWSER=none react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "token-server": "node server/server.js",
+    "dev:all": "concurrently -k -n token,web -c blue,green \"npm:token-server\" \"npm:dev\""
   },
   "eslintConfig": {
     "extends": "react-app"
@@ -31,11 +34,12 @@
     ]
   },
   "devDependencies": {
-    "devtron": "^1.4.0",
-    "electron": "^7.0.0",
-    "electron-devtools-installer": "^2.2.4",
-    "react": "^16.11.0",
-    "react-dom": "^16.11.0",
-    "react-scripts": "3.2.0"
+    "@electron/devtron": "^2.1.1",
+    "concurrently": "^9.2.1",
+    "electron": "^24.8.8",
+    "electron-devtools-installer": "^4.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-scripts": "^5.0.1"
   }
 }
