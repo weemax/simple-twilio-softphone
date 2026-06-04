@@ -1,0 +1,15 @@
+{
+  "name": "operator-token-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local capability token broker for the Operator softphone. Signs Twilio AccessTokens on demand so the renderer never sees Auth Tokens.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "twilio": "^5.3.0"
+  }
+}
