@@ -29,6 +29,7 @@ const {
   TWILIO_API_KEY,
   TWILIO_API_SECRET,
   TWILIO_TWIML_APP_SID,
+  TWILIO_CALLER_ID,
 } = process.env;
 
 function requireEnv() {
@@ -45,6 +46,12 @@ function requireEnv() {
       '[token-server] See server/README.md for setup instructions.'
     );
     process.exit(1);
+  }
+  if (!TWILIO_CALLER_ID) {
+    console.warn(
+      '[token-server] TWILIO_CALLER_ID not set — outbound calls will fail ' +
+        'with 31005. Add a verified Twilio number to server/.env.'
+    );
   }
 }
 
@@ -104,7 +111,9 @@ const server = http.createServer(async (req, res) => {
     return handleToken(req, res);
   }
 
-  if (url === '/twiml') {
+  if (url === '/twiml' || url === '/') {
+    // Both /twiml and the bare root return TwiML, so a TwiML App pointed
+    // at the tunnel root still works. /health stays the only probe path.
     if (req.method !== 'GET' && req.method !== 'POST') {
       return send(res, 405, { error: 'method not allowed' });
     }
@@ -170,8 +179,12 @@ async function handleToken(req, res) {
 //   - Otherwise 400 with an error TwiML so Twilio reads the message.
 //
 // The VoiceResponse helper escapes user input safely.
-function handleTwiml(req, res) {
-  const params = parseQueryAndBody(req);
+async function handleTwiml(req, res) {
+  const params = await parseQueryAndBody(req);
+  return renderTwiml(params, res);
+}
+
+function renderTwiml(params, res) {
   const to = (params.To || '').toString().trim();
 
   const { VoiceResponse } = twilio.twiml;
@@ -183,13 +196,14 @@ function handleTwiml(req, res) {
   }
 
   if (/^[A-Za-z0-9_\-]{1,64}$/.test(to)) {
-    // Operator-to-Operator (Client) call.
-    const dial = response.dial({ callerId: undefined });
+    // Operator-to-Operator (Client) call. callerId is required for Client
+    // originations, even when both legs are clients.
+    const dial = response.dial({ callerId: TWILIO_CALLER_ID });
     dial.client(to);
   } else if (/^\+?[0-9\s\-\(\)]{1,32}$/.test(to)) {
-    // PSTN call. Twilio will use the account's default callerId unless
-    // the TwiML App has one configured.
-    const dial = response.dial();
+    // PSTN call. Pass the configured caller ID; Twilio rejects the call
+    // with 31005 if this is missing on a Client-originated call.
+    const dial = response.dial({ callerId: TWILIO_CALLER_ID });
     dial.number(to);
   } else {
     response.say('Invalid destination format.');
@@ -200,13 +214,33 @@ function handleTwiml(req, res) {
 
 function parseQueryAndBody(req) {
   // Combine query string and (form-encoded) body into one object.
-  // For GET, there's no body — for POST, Twilio posts form-urlencoded.
-  const out = {};
-  try {
-    const u = new URL(req.url, 'http://localhost');
-    u.searchParams.forEach((v, k) => (out[k] = v));
-  } catch (_) {}
-  return out;
+  return new Promise((resolve, reject) => {
+    const out = {};
+    try {
+      const u = new URL(req.url, 'http://localhost');
+      u.searchParams.forEach((v, k) => (out[k] = v));
+    } catch (_) {}
+    // Drain body for POSTs. Most Twilio webhooks are GET, but some are POST.
+    if (req.method === 'POST') {
+      const chunks = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        if (text) {
+          try {
+            const sp = new URLSearchParams(text);
+            sp.forEach((v, k) => (out[k] = v));
+          } catch (e) {
+            return reject(e);
+          }
+        }
+        resolve(out);
+      });
+      req.on('error', reject);
+    } else {
+      resolve(out);
+    }
+  });
 }
 
 function sendTwiml(res, response) {

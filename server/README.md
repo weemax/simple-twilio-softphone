@@ -80,16 +80,37 @@ Response:
 
 Errors are JSON `{ "error": "…" }` with a 4xx/5xx status.
 
+### `GET|POST /twiml`
+
+Returns TwiML for outbound (and inbound) calls. Reads the `To` parameter
+from either the query string (GET) or a form-encoded body (POST) and
+emits:
+
+- `<Dial><Client>{to}</Client></Dial>` if `to` looks like a Client identity
+  (Operator→Operator, no PSTN)
+- `<Dial><Number>{to}</Number></Dial>` if `to` looks like a phone number
+- `<Response><Say>…</Say></Response>` for anything else
+
+Set this URL as the Voice URL of your TwiML App in the Twilio console.
+For inbound calls to a real phone number, also point the number's "A
+call comes in" webhook here.
+
+This endpoint is **publicly reachable** (it must be — Twilio's webhook
+callers aren't on localhost). The endpoint is authless, but the URL is
+unguessable, and the response contains no secrets.
+
 ## Security notes
 
-- The server only binds to `127.0.0.1` (or whatever `HOST` you set). It
-  will refuse connections from any other address.
-- It only accepts POST `/token` and GET `/health`. Everything else 404s.
-- The TwiML App SID determines where outbound calls are routed. Whatever
-  TwiML that app points to will run for outbound calls — make sure you
-  trust the URL configured in the Twilio console.
-- For inbound calls, configure a Twilio phone number's voice webhook to
-  point at the same TwiML App (or directly at your TwiML Bin).
+- `/token` only binds to `127.0.0.1` and refuses non-loopback connections
+  — it returns signed JWTs and must never leak.
+- `/twiml` is the only public endpoint. There is no auth, but the
+  response contains only TwiML — no secrets, no PII — so the worst
+  case from URL exposure is "someone can make calls billed to your
+  account" which is the same risk as the TwiML App URL being public
+  anyway.
+- If you're using ngrok, the random subdomain is your only auth. If you
+  want a hard second factor, put the endpoint behind a path secret
+  (e.g. `/twiml/RANDOM_HEX`) and configure that in the Twilio console.
 
 ## Production alternative
 
