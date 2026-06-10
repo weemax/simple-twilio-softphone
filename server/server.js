@@ -19,7 +19,9 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 // it. The auth token is never sent over the wire.
 
 const http = require('http');
+const path = require('path');
 const twilio = require('twilio');
+const { SmsStore, normalizeNumber, MAX_BODY_LENGTH } = require('./smsStore');
 
 const PORT = parseInt(process.env.PORT || '5050', 10);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -30,7 +32,29 @@ const {
   TWILIO_API_SECRET,
   TWILIO_TWIML_APP_SID,
   TWILIO_CALLER_ID,
+  TWILIO_SMS_FROM, // optional: dedicated sender number; falls back to TWILIO_CALLER_ID
+  SMS_STATUS_CALLBACK_URL, // optional: explicit override; otherwise derived
 } = process.env;
+
+// SMS persistence lives next to the token server so the renderer and the
+// webhook can both read it. Override with SMS_STORE_PATH for tests.
+const SMS_STORE_PATH =
+  process.env.SMS_STORE_PATH ||
+  path.join(__dirname, 'sms-store.json');
+const smsStore = new SmsStore(SMS_STORE_PATH);
+
+// Build the absolute status-callback URL we tell Twilio to POST to. Twilio
+// requires a publicly reachable URL — in dev that's the ngrok tunnel plus
+// the public /sms/status path. In prod it could be a stable hostname.
+function getStatusCallbackUrl() {
+  if (SMS_STATUS_CALLBACK_URL) return SMS_STATUS_CALLBACK_URL;
+  // Default to the same host as the inbound webhook: rely on the env to
+  // provide a public base, or fail closed (don't register a callback).
+  if (process.env.SMS_PUBLIC_BASE_URL) {
+    return process.env.SMS_PUBLIC_BASE_URL.replace(/\/+$/, '') + '/sms/status';
+  }
+  return null; // not configured — handleSmsSend will skip statusCallback
+}
 
 function requireEnv() {
   const missing = [];
@@ -118,6 +142,44 @@ const server = http.createServer(async (req, res) => {
       return send(res, 405, { error: 'method not allowed' });
     }
     return handleTwiml(req, res);
+  }
+
+  if (url === '/sms/send') {
+    if (!isLocalRequest(req)) {
+      return send(res, 403, { error: 'local only' });
+    }
+    if (req.method !== 'POST') {
+      return send(res, 405, { error: 'method not allowed' });
+    }
+    return handleSmsSend(req, res);
+  }
+
+  if (url === '/sms/conversations') {
+    if (!isLocalRequest(req)) {
+      return send(res, 403, { error: 'local only' });
+    }
+    if (req.method !== 'GET') {
+      return send(res, 405, { error: 'method not allowed' });
+    }
+    return handleSmsList(req, res);
+  }
+
+  if (url === '/sms/inbound') {
+    // Public — Twilio's webhook must reach this without auth. See
+    // handleSmsInbound for the v1 trust model.
+    if (req.method !== 'GET' && req.method !== 'POST') {
+      return send(res, 405, { error: 'method not allowed' });
+    }
+    return handleSmsInbound(req, res);
+  }
+
+  if (url === '/sms/status') {
+    // Public — Twilio's per-message status callback. Same trust model
+    // as /sms/inbound.
+    if (req.method !== 'GET' && req.method !== 'POST') {
+      return send(res, 405, { error: 'method not allowed' });
+    }
+    return handleSmsStatus(req, res);
   }
 
   return send(res, 404, { error: 'not found' });
@@ -253,10 +315,284 @@ function sendTwiml(res, response) {
   res.end(xml);
 }
 
+// --- SMS ---
+
+// Shared between /sms/* handlers. /token-style localhost guard.
+// /sms/inbound is the only public endpoint, and it does its own
+// content-type handling.
+function isLocalRequest(req) {
+  const remote = req.socket.remoteAddress || '';
+  return (
+    remote === '127.0.0.1' ||
+    remote === '::1' ||
+    remote === '::ffff:127.0.0.1'
+  );
+}
+
+// Used by /sms/send (JSON body) and /sms/conversations (no body).
+function readJsonBody(req, maxBytes = 64 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on('data', (c) => {
+      total += c.length;
+      if (total > maxBytes) {
+        reject(new Error('body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8');
+      if (!text) return resolve({});
+      try {
+        resolve(JSON.parse(text));
+      } catch (_) {
+        reject(new Error('invalid JSON body'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+// Twilio's inbound webhook posts application/x-www-form-urlencoded.
+// Reuse the same parser logic as handleTwiml but inline so we don't
+// have to refactor that path.
+function readFormBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8');
+      const out = {};
+      if (text) {
+        try {
+          const sp = new URLSearchParams(text);
+          sp.forEach((v, k) => (out[k] = v));
+        } catch (e) {
+          return reject(e);
+        }
+      }
+      resolve(out);
+    });
+    req.on('error', reject);
+  });
+}
+
+async function handleSmsSend(req, res) {
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    return send(res, 400, { error: err.message });
+  }
+
+  const to = normalizeNumber(body.to);
+  const text = typeof body.body === 'string' ? body.body.trim() : '';
+  if (!to) {
+    return send(res, 400, { error: '`to` must be a valid E.164 number' });
+  }
+  if (!text) {
+    return send(res, 400, { error: '`body` is required' });
+  }
+  if (text.length > MAX_BODY_LENGTH) {
+    return send(res, 400, {
+      error: `body exceeds ${MAX_BODY_LENGTH} chars`,
+    });
+  }
+
+  // Persist the outbound message locally *first* so the UI sees it even
+  // if Twilio's API call fails. On Twilio success we update the local
+  // record with the real SID + status; on failure we mark it failed.
+  const placeholder = await smsStore.appendMessage({
+    number: to,
+    sid: null,
+    direction: 'outbound',
+    body: text,
+    at: Date.now(),
+    status: 'sending',
+  });
+  const placeholderMsg = placeholder.messages[placeholder.messages.length - 1];
+
+  const from = TWILIO_SMS_FROM || TWILIO_CALLER_ID;
+  if (!from) {
+    const failed = await smsStore._withLock(() => {
+      placeholderMsg.status = 'failed';
+      smsStore._persist();
+    });
+    return send(res, 500, {
+      error: 'no outbound SMS number configured (set TWILIO_SMS_FROM or TWILIO_CALLER_ID)',
+    });
+  }
+
+  // Build the messages.create() params. If a status callback URL is
+  // configured, ask Twilio to POST to it whenever this message's
+  // delivery status changes (queued -> sent -> delivered, or -> failed).
+  const statusCallbackUrl = getStatusCallbackUrl();
+  const createParams = { to, from, body: text };
+  if (statusCallbackUrl) {
+    createParams.statusCallback = statusCallbackUrl;
+  }
+
+  try {
+    const client = twilio(TWILIO_API_KEY, TWILIO_API_SECRET, {
+      accountSid: TWILIO_ACCOUNT_SID,
+    });
+    const result = await client.messages.create(createParams);
+    // Update the local record with the real SID and Twilio status.
+    await smsStore._withLock(() => {
+      const conv = smsStore._data[to];
+      if (conv) {
+        const m = conv.messages.find((x) => x === placeholderMsg);
+        if (m) {
+          m.sid = result.sid;
+          m.status = (result.status || 'sent').toLowerCase();
+        }
+        smsStore._persist();
+      }
+    });
+    return send(res, 200, {
+      ok: true,
+      sid: result.sid,
+      to,
+      status: result.status,
+    });
+  } catch (err) {
+    console.error('[sms] send failed:', err.message);
+    await smsStore._withLock(() => {
+      const conv = smsStore._data[to];
+      if (conv) {
+        const m = conv.messages.find((x) => x === placeholderMsg);
+        if (m) m.status = 'failed';
+        smsStore._persist();
+      }
+    });
+    return send(res, 502, { error: 'twilio send failed', detail: err.message });
+  }
+}
+
+async function handleSmsInbound(req, res) {
+  // Public endpoint — anyone who knows the ngrok URL can POST here, but
+  // Twilio's webhook signature is the proper auth. For v1 we accept any
+  // well-formed Twilio form body; signature verification is a v2 item.
+  let params;
+  try {
+    params = await readFormBody(req);
+  } catch (err) {
+    // Twilio expects TwiML even on error so it doesn't retry forever.
+    res.writeHead(400, { 'Content-Type': 'text/xml; charset=utf-8' });
+    res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Say>Invalid request.</Say></Response>');
+    return;
+  }
+
+  const from = normalizeNumber(params.From);
+  const body = typeof params.Body === 'string' ? params.Body : '';
+  const sid = params.MessageSid || params.SmsSid || null;
+  const smsStatus = (params.SmsStatus || 'received').toLowerCase();
+
+  if (!from) {
+    res.writeHead(400, { 'Content-Type': 'text/xml; charset=utf-8' });
+    res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Say>Invalid sender.</Say></Response>');
+    return;
+  }
+
+  try {
+    await smsStore.appendMessage({
+      number: from,
+      sid,
+      direction: 'inbound',
+      body,
+      at: Date.now(),
+      status: smsStatus,
+    });
+  } catch (err) {
+    console.error('[sms] inbound persist failed:', err.message);
+    // Still 200 to Twilio — we don't want retries for our own bugs.
+  }
+
+  // Empty TwiML tells Twilio "got it, do nothing." A non-2xx here would
+  // cause Twilio to retry.
+  res.writeHead(200, { 'Content-Type': 'text/xml; charset=utf-8' });
+  res.end('<?xml version="1.0" encoding="UTF-8"?><Response/>');
+}
+
+// Twilio's per-message status callback. POSTs application/x-www-form-urlencoded
+// with at least MessageSid + MessageStatus (and SmsSid + SmsStatus as legacy
+// aliases). See:
+//   https://www.twilio.com/docs/messaging/api/message-resource#message-status-values
+//
+// We look up the message by SID in the store and update its status. The
+// renderer's 3s poll picks up the new status on the next cycle. No TwiML
+// response expected — Twilio just records the HTTP 2xx.
+async function handleSmsStatus(req, res) {
+  let params;
+  try {
+    params = await readFormBody(req);
+  } catch (_) {
+    return send(res, 400, { ok: false, error: 'invalid form body' });
+  }
+
+  const sid = params.MessageSid || params.SmsSid || null;
+  const status = (
+    params.MessageStatus ||
+    params.SmsStatus ||
+    ''
+  ).toLowerCase();
+
+  if (!sid) {
+    return send(res, 400, { ok: false, error: 'missing MessageSid' });
+  }
+  if (!status) {
+    return send(res, 400, { ok: false, error: 'missing MessageStatus' });
+  }
+
+  // Twilio's documented status values are: queued, sending, sent,
+  // failed, delivered, undelivered, read (WhatsApp only). We accept
+  // any string and lower-case it; the renderer's StatusBadge handles
+  // known values and falls back to the raw string.
+  try {
+    const updated = await smsStore.updateMessageBySid({ sid, status });
+    // 200 either way — Twilio doesn't retry on our internal state.
+    return send(res, 200, { ok: true, updated });
+  } catch (err) {
+    console.error('[sms] status update failed:', err.message);
+    return send(res, 500, { ok: false, error: 'update failed' });
+  }
+}
+
+function handleSmsList(req, res) {
+  // Optional ?number=+1… to fetch a single thread in full.
+  const url = new URL(req.url, 'http://localhost');
+  const numParam = url.searchParams.get('number');
+  if (numParam) {
+    const conv = smsStore.getConversation(numParam);
+    if (!conv) return send(res, 404, { error: 'no such conversation' });
+    return send(res, 200, conv);
+  }
+  return send(res, 200, { conversations: smsStore.listConversations() });
+}
+
 requireEnv();
 server.listen(PORT, HOST, () => {
   console.log(
     `[token-server] listening on http://${HOST}:${PORT} ` +
       `(account ${TWILIO_ACCOUNT_SID.slice(0, 6)}…)`
   );
+  console.log(
+    `[token-server] sms store: ${SMS_STORE_PATH}` +
+      (TWILIO_SMS_FROM || TWILIO_CALLER_ID
+        ? ` · sender: ${TWILIO_SMS_FROM || TWILIO_CALLER_ID}`
+        : ' · sender: NOT CONFIGURED (sms/send will 500)')
+  );
+  const cb = getStatusCallbackUrl();
+  if (cb) {
+    console.log(`[token-server] sms status callback: ${cb}`);
+  } else {
+    console.log(
+      '[token-server] sms status callback: NOT CONFIGURED ' +
+        '(set SMS_PUBLIC_BASE_URL or SMS_STATUS_CALLBACK_URL — ' +
+        'outbound status will stay at queued/sent)'
+    );
+  }
 });

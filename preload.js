@@ -23,6 +23,9 @@ const INVOKABLE_CHANNELS = new Set([
   'secrets:set',
   'secrets:get',
   'secrets:clear',
+  // SMS (renderer -> main -> local server)
+  'sms:list',
+  'sms:send',
 ]);
 
 /**
@@ -64,6 +67,16 @@ const api = {
     set: (key, value) => ipcRenderer.invoke('secrets:set', { key, value }),
     get: (key) => ipcRenderer.invoke('secrets:get', key),
     clear: (key) => ipcRenderer.invoke('secrets:clear', key),
+  },
+
+  sms: {
+    // Returns { ok: true, conversations: [...] } or { ok: true, number, messages, ... }
+    // for single-thread fetch, or { ok: false, error } on failure.
+    // Pass { number: '+1…' } to fetch a single thread; omit for all.
+    list: (opts) => ipcRenderer.invoke('sms:list', opts || {}),
+    // payload: { to: '+1…', body: '…' }.
+    // Returns { ok: true, sid, to, status } or { ok: false, error }.
+    send: (payload) => ipcRenderer.invoke('sms:send', payload),
   },
 
   app: {

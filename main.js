@@ -5,6 +5,7 @@ const isDev = require('electron-is-dev');
 const secrets = require('./main/services/secrets');
 const config = require('./main/services/config');
 const tokenBroker = require('./main/services/tokenBroker');
+const smsBroker = require('./main/services/smsBroker');
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -68,6 +69,31 @@ function registerIpc() {
   ipcMain.handle('token:fetch', async (_e, identity) => {
     try {
       return { ok: true, ...(await tokenBroker.fetchToken(identity)) };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  // SMS — list and send. Inbound webhook is server-side only (no IPC).
+  ipcMain.handle('sms:list', async (_e, opts) => {
+    try {
+      const number = opts && typeof opts.number === 'string' ? opts.number : null;
+      const data = await smsBroker.listConversations(number);
+      return { ok: true, ...(data || {}) };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+  ipcMain.handle('sms:send', async (_e, payload) => {
+    try {
+      if (!payload || typeof payload !== 'object') {
+        return { ok: false, error: 'payload required' };
+      }
+      const data = await smsBroker.sendMessage({
+        to: payload.to,
+        body: payload.body,
+      });
+      return { ok: true, ...(data || {}) };
     } catch (err) {
       return { ok: false, error: err.message };
     }

@@ -57,6 +57,11 @@ typings/
 # dotenv environment variables file
 .env
 
+# SMS conversation store (contains message bodies — never commit)
+server/sms-store.json
+server/sms-store.json.corrupt-*
+server/sms-store.json.tmp
+
 # next.js build output
 .next
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.

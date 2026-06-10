@@ -79,6 +79,31 @@ input, select, textarea {
 }
 .app-header .link:hover { border-color: var(--accent); }
 
+.app-tabs {
+  display: flex;
+  gap: 2px;
+  margin-left: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px;
+  background: var(--bg-elev);
+}
+.app-tab {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+}
+.app-tab:hover { color: var(--text); }
+.app-tab.active {
+  background: var(--accent);
+  color: #fff;
+}
+
 .status-bar {
   padding: 6px 20px;
   font-size: 12px;
