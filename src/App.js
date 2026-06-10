@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { TwilioProvider, useTwilio } from './contexts/TwilioContext';
+import { SmsProvider } from './contexts/SmsContext';
 import { AccountConfig } from './components/AccountConfig/AccountConfig';
 import { Dialpad } from './components/Dialpad/Dialpad';
 import { CallControls } from './components/CallControls/CallControls';
 import { CallScreen } from './components/CallScreen/CallScreen';
+import { SmsPanel } from './components/SmsPanel/SmsPanel';
 import './App.css';
+import './components/SmsPanel/SmsPanel.css';
 
 function StatusBar({ snapshot, accountSid }) {
   let label;
@@ -115,12 +118,35 @@ function MainPanel() {
   }, []);
 
   const showCallScreen = snapshot.currentCall || snapshot.incomingCall;
+  // 'voice' = dialer or call screen; 'messages' = sms panel.
+  // An incoming or active call always wins — we route to call screen
+  // even if the user is on the messages tab.
+  const [view, setView] = useState('voice');
+  const effectiveView = showCallScreen ? 'voice' : view;
 
   return (
     <div className="app">
       <header className="app-header">
         <h1>Operator</h1>
         <span className="subtitle">Twilio Softphone</span>
+        {configured && accountSid && identity && (
+          <nav className="app-tabs" aria-label="View">
+            <button
+              type="button"
+              className={`app-tab${effectiveView === 'voice' ? ' active' : ''}`}
+              onClick={() => setView('voice')}
+            >
+              Voice
+            </button>
+            <button
+              type="button"
+              className={`app-tab${effectiveView === 'messages' ? ' active' : ''}`}
+              onClick={() => setView('messages')}
+            >
+              Messages
+            </button>
+          </nav>
+        )}
         <span className="spacer" />
         <button
           type="button"
@@ -156,6 +182,8 @@ function MainPanel() {
               (snapshot.currentCall || snapshot.incomingCall)?.muted || false
             }
           />
+        ) : effectiveView === 'messages' ? (
+          <SmsPanel />
         ) : (
           <div className="dialer">
             <Dialpad
@@ -205,7 +233,9 @@ function MainPanel() {
 export default function App() {
   return (
     <TwilioProvider>
-      <MainPanel />
+      <SmsProvider>
+        <MainPanel />
+      </SmsProvider>
     </TwilioProvider>
   );
 }
