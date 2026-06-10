@@ -161,6 +161,28 @@ class SmsStore {
       return true;
     });
   }
+
+  // Update a message's status by its Twilio SID. Used by the status
+  // callback handler. Scans all conversations (linear; O(threads*500)
+  // worst case — fine for our scale). Returns true if a message was
+  // updated, false if no message with that SID exists yet.
+  updateMessageBySid({ sid, status }) {
+    if (!sid || !status) {
+      return Promise.resolve(false);
+    }
+    const newStatus = String(status).toLowerCase();
+    return this._withLock(() => {
+      for (const conv of Object.values(this._data)) {
+        const m = conv.messages.find((x) => x.sid === sid);
+        if (m) {
+          m.status = newStatus;
+          this._persist();
+          return true;
+        }
+      }
+      return false;
+    });
+  }
 }
 
 // E.164 normalization. We accept whatever the caller passes, strip
