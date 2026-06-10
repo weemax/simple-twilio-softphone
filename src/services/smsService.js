@@ -103,9 +103,34 @@ export class SmsService {
     if (!window.operator || !window.operator.sms) {
       throw new Error('sms bridge not available');
     }
-    const res = await window.operator.sms.list({ number });
-    if (!res || !res.ok) {
-      throw new Error((res && res.error) || 'thread fetch failed');
+    let res;
+    try {
+      res = await window.operator.sms.list({ number });
+    } catch (e) {
+      // Bridge-level failure (IPC down, etc.) — real error.
+      throw e;
+    }
+    if (!res) {
+      throw new Error('thread fetch failed: empty response');
+    }
+    if (!res.ok) {
+      // 404 from the server means "no conversation exists for this
+      // number yet" — that's the expected state when the user clicks
+      // "+ New" with a number that hasn't been texted before. Synthesize
+      // an empty thread so the composer works; the first outbound send
+      // will create the real conversation on the server.
+      const msg = (res.error || '').toLowerCase();
+      if (msg.includes('no such conversation') || msg.includes('404')) {
+        return {
+          number,
+          lastMessageAt: 0,
+          lastBody: '',
+          lastDirection: null,
+          messageCount: 0,
+          messages: [],
+        };
+      }
+      throw new Error(res.error || 'thread fetch failed');
     }
     // Single-thread responses come back shaped as
     // { ok: true, number, lastMessageAt, ..., messages: [...] }.

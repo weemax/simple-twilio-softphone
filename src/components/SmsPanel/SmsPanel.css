@@ -47,6 +47,76 @@
   color: var(--accent-hi);
 }
 
+.sms-new-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--bg-elev-2);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.sms-new-input {
+  flex: 1;
+  min-width: 120px;
+  padding: 6px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.sms-new-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(47, 129, 247, 0.2);
+}
+
+.sms-new-confirm,
+.sms-new-cancel {
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.sms-new-confirm {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.sms-new-confirm:hover:not(:disabled) {
+  background: var(--accent-hi);
+  border-color: var(--accent-hi);
+}
+
+.sms-new-confirm:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sms-new-cancel {
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.sms-new-cancel:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.sms-new-error {
+  flex-basis: 100%;
+  color: var(--danger);
+  margin-top: 2px;
+}
+
 .sms-panel-body {
   display: flex;
   flex: 1;
@@ -240,6 +310,12 @@
 }
 
 .sms-status.ok { color: #b6f0c2; }
+.sms-status.delivered {
+  color: #b6f0c2;
+  background: rgba(46, 160, 67, 0.25);
+  border: 1px solid rgba(46, 160, 67, 0.4);
+}
+.sms-status.sent { color: rgba(255, 255, 255, 0.85); }
 .sms-status.fail { color: #ffb4b0; }
 .sms-status.pending { color: rgba(255, 255, 255, 0.7); }
 

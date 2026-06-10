@@ -101,15 +101,30 @@ function ConversationList({ conversations, selected, onSelect, error }) {
   );
 }
 
+// True if the thread has any outbound message whose status is not yet a
+// terminal state (delivered / failed / undelivered). Used to decide
+// whether to re-fetch the thread on each poll — if everything has
+// settled, no need to keep polling.
+function threadHasUnsettledOutbound(thread) {
+  if (!thread || !Array.isArray(thread.messages)) return false;
+  const SETTLED = new Set(['delivered', 'failed', 'undelivered']);
+  for (const m of thread.messages) {
+    if (m.direction === 'outbound' && m.status && !SETTLED.has(m.status)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function StatusBadge({ status }) {
   // Maps Twilio/local statuses to a short label + CSS class.
   // Unknown / absent status → nothing.
   if (!status) return null;
   const map = {
     sending: { label: 'sending', cls: 'pending' },
-    sent: { label: 'sent', cls: 'ok' },
+    sent: { label: 'sent', cls: 'sent' },
     queued: { label: 'queued', cls: 'pending' },
-    delivered: { label: 'delivered', cls: 'ok' },
+    delivered: { label: 'delivered', cls: 'delivered' },
     failed: { label: 'failed', cls: 'fail' },
     undelivered: { label: 'undelivered', cls: 'fail' },
     received: { label: '', cls: '' },
@@ -244,6 +259,12 @@ export function SmsPanel() {
   const [thread, setThread] = useState(null);
   const [threadLoading, setThreadLoading] = useState(false);
   const [threadError, setThreadError] = useState(null);
+  // Inline "new conversation" UI state. window.prompt is unsupported in
+  // React, so we render a small input row at the top of the list instead.
+  const [newMode, setNewMode] = useState(false);
+  const [newNumber, setNewNumber] = useState('');
+  const [newError, setNewError] = useState(null);
+  const newInputRef = useRef(null);
 
   // When the conversation list changes (poll), auto-select the first one
   // if nothing is selected. Also: if the selected conversation's message
@@ -261,11 +282,33 @@ export function SmsPanel() {
     } else {
       const found = snapshot.conversations.find((c) => c.number === selected);
       if (!found) {
-        // Selected conversation disappeared (corrupt store, etc.)
-        setSelected(snapshot.conversations[0].number);
-        setThread(null);
-      } else if (thread && found.messageCount > thread.messages.length) {
-        // New message arrived — refresh thread in background.
+        // Selected conversation isn't in the list. Two cases:
+        //   (a) User just clicked "+ New" with a number that's never
+        //       been texted → thread is the synthesized empty one. Hold
+        //       the selection; the first send will create the real
+        //       conversation and the next poll will include it.
+        //   (b) Conversation was deleted from the store → fall back to
+        //       the first one in the list.
+        const isUserPickedNew =
+          thread &&
+          Array.isArray(thread.messages) &&
+          thread.messages.length === 0;
+        if (!isUserPickedNew) {
+          setSelected(snapshot.conversations[0].number);
+          setThread(null);
+        }
+      } else if (
+        thread &&
+        thread.messages &&
+        thread.messages.length > 0 &&
+        (found.messageCount > thread.messages.length ||
+          // Status callbacks update an existing message's status without
+          // changing messageCount — refresh anyway so the badge updates.
+          threadHasUnsettledOutbound(thread))
+      ) {
+        // New message arrived, OR an outbound message still has a
+        // status that could update (queued -> sent -> delivered /
+        // failed). Refresh the thread in the background.
         getThread(selected)
           .then((t) => setThread(t))
           .catch(() => {
@@ -330,30 +373,90 @@ export function SmsPanel() {
     [selected, send, getThread]
   );
 
-  // If the user wants to text a number that isn't in the list yet,
-  // they can type a new number in a "new conversation" affordance.
-  // For v1, this is just a button at the top of the list.
-  const handleStartNew = useCallback(() => {
-    const raw = window.prompt('Send to (E.164, e.g. +155****0100):');
-    if (!raw) return;
-    const digits = raw.replace(/[^0-9]/g, '');
-    const e164 = digits.length >= 7 && digits.length <= 15 ? '+' + digits : null;
-    if (!e164) {
-      window.alert('Please enter a valid E.164 phone number.');
+  // Inline "+ New" thread input. Replaces the prior window.prompt() call,
+  // which throws in React ("prompt() is and will not be supported").
+  const enterNewMode = useCallback(() => {
+    setNewMode(true);
+    setNewNumber('');
+    setNewError(null);
+    // Defer focus until the input is mounted.
+    setTimeout(() => {
+      if (newInputRef.current) newInputRef.current.focus();
+    }, 0);
+  }, []);
+
+  const cancelNew = useCallback(() => {
+    setNewMode(false);
+    setNewNumber('');
+    setNewError(null);
+  }, []);
+
+  const confirmNew = useCallback(() => {
+    const digits = newNumber.replace(/[^0-9]/g, '');
+    if (digits.length < 7 || digits.length > 15) {
+      setNewError('Enter a valid phone number (7–15 digits).');
       return;
     }
+    const e164 = '+' + digits;
     setSelected(e164);
-  }, []);
+    setNewMode(false);
+    setNewNumber('');
+    setNewError(null);
+  }, [newNumber]);
+
+  const onNewKeyDown = useCallback(
+    (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        confirmNew();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelNew();
+      }
+    },
+    [confirmNew, cancelNew]
+  );
 
   return (
     <div className="sms-panel">
       <div className="sms-panel-header">
         <span className="sms-panel-title">Messages</span>
         <span className="spacer" />
-        <button type="button" className="link small" onClick={handleStartNew}>
-          + New
-        </button>
+        {!newMode && (
+          <button type="button" className="link small" onClick={enterNewMode}>
+            + New
+          </button>
+        )}
       </div>
+      {newMode && (
+        <div className="sms-new-row">
+          <input
+            ref={newInputRef}
+            type="tel"
+            className="sms-new-input"
+            placeholder="+1 555 0100"
+            value={newNumber}
+            onChange={(e) => {
+              setNewNumber(e.target.value);
+              if (newError) setNewError(null);
+            }}
+            onKeyDown={onNewKeyDown}
+            aria-label="New conversation phone number"
+          />
+          <button
+            type="button"
+            className="sms-new-confirm"
+            onClick={confirmNew}
+            disabled={!newNumber.trim()}
+          >
+            OK
+          </button>
+          <button type="button" className="sms-new-cancel" onClick={cancelNew}>
+            Cancel
+          </button>
+          {newError && <div className="sms-new-error small">{newError}</div>}
+        </div>
+      )}
       <div className="sms-panel-body">
         <div className="sms-panel-list">
           <ConversationList
