@@ -306,3 +306,51 @@ input, select, textarea {
 }
 .call-screen .actions .mute.on { background: var(--warn); color: #1a1a1a; border-color: var(--warn); }
 .call-screen.idle { color: var(--text-dim); padding: 48px 0; }
+
+/* In-call DTMF keypad */
+.call-screen .dtmf {
+  max-width: 280px;
+  margin: 20px auto 0;
+}
+.call-screen .dtmf-sent {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 18px;
+  letter-spacing: 0.15em;
+  min-height: 24px;
+  margin-bottom: 12px;
+  color: var(--text);
+  word-break: break-all;
+}
+.call-screen .dtmf-sent .placeholder {
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: normal;
+}
+.call-screen .dtmf-keys {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.call-screen .dtmf-key {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 0;
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 80ms ease;
+}
+.call-screen .dtmf-key:hover { background: var(--bg-elev-2); }
+.call-screen .dtmf-key:active { background: var(--bg-elev-2); transform: scale(0.98); }
+.call-screen .actions .keypad {
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.call-screen .actions .keypad.on {
+  background: var(--accent, var(--bg-elev-2));
+  border-color: var(--accent-hi, var(--border));
+}

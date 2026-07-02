@@ -178,6 +178,7 @@ function MainPanel() {
             }
             onHangup={hangup}
             onMute={toggleMute}
+            onSendDigit={sendDigits}
             muted={
               (snapshot.currentCall || snapshot.incomingCall)?.muted || false
             }

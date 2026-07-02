@@ -10,6 +10,78 @@
 
 import { Device } from '@twilio/voice-sdk';
 
+// The Voice SDK plays a local "dialtone" feedback tone through the
+// AudioContext's default output every time sendDigits() is called — full-volume
+// sine waves on the laptop speakers, independent of the call's audio sink, loud
+// enough to be jarring. We replace each DTMF sound with our own quiet, short
+// dual-tone clip so the operator still gets familiar phone-key feedback without
+// the blast. (The actual DTMF is transmitted to the far end via RTCDTMFSender
+// regardless of this local sound.) See @twilio/voice-sdk call.js sendDigits().
+const DTMF_FEEDBACK_SOUNDS = (() => {
+  const sampleRate = 8000;
+  const durationSec = 0.09;
+  const amplitude = 0.06; // per-tone; the two tones sum to ~0.12 — deliberately quiet.
+  const fadeSec = 0.008; // short fade in/out to avoid clicks.
+
+  // Standard DTMF row/column frequency pairs, keyed by the SDK's sound names.
+  const TONE_PAIRS = {
+    dtmf1: [697, 1209], dtmf2: [697, 1336], dtmf3: [697, 1477],
+    dtmf4: [770, 1209], dtmf5: [770, 1336], dtmf6: [770, 1477],
+    dtmf7: [852, 1209], dtmf8: [852, 1336], dtmf9: [852, 1477],
+    dtmfs: [941, 1209], dtmf0: [941, 1336], dtmfh: [941, 1477],
+  };
+
+  function toneDataUri([f1, f2]) {
+    const numSamples = Math.floor(sampleRate * durationSec);
+    const fadeSamples = Math.max(1, Math.floor(sampleRate * fadeSec));
+    const dataBytes = numSamples * 2;
+    const buffer = new ArrayBuffer(44 + dataBytes);
+    const view = new DataView(buffer);
+    const writeStr = (offset, str) => {
+      for (let i = 0; i < str.length; i += 1) {
+        view.setUint8(offset + i, str.charCodeAt(i));
+      }
+    };
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + dataBytes, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true); // PCM fmt chunk size
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true); // byte rate
+    view.setUint16(32, 2, true); // block align
+    view.setUint16(34, 16, true); // bits per sample
+    writeStr(36, 'data');
+    view.setUint32(40, dataBytes, true);
+    for (let i = 0; i < numSamples; i += 1) {
+      const t = i / sampleRate;
+      let env = 1;
+      if (i < fadeSamples) env = i / fadeSamples;
+      else if (i > numSamples - fadeSamples) env = (numSamples - i) / fadeSamples;
+      const sample =
+        amplitude *
+        env *
+        (Math.sin(2 * Math.PI * f1 * t) + Math.sin(2 * Math.PI * f2 * t));
+      // Clamp to [-1, 1] then scale to signed 16-bit.
+      const clamped = Math.max(-1, Math.min(1, sample));
+      view.setInt16(44 + i * 2, Math.round(clamped * 32767), true);
+    }
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.length; i += 1) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return `data:audio/wav;base64,${btoa(binary)}`;
+  }
+
+  return Object.keys(TONE_PAIRS).reduce((acc, name) => {
+    acc[name] = toneDataUri(TONE_PAIRS[name]);
+    return acc;
+  }, {});
+})();
+
 const STATE = {
   IDLE: 'idle',
   REGISTERING: 'registering',
@@ -93,6 +165,9 @@ export class TwilioService {
       codecPreferences: ['opus', 'pcmu'],
       // Allow the user to answer/reject incoming calls from the UI.
       allowIncomingWhileBusy: false,
+      // Replace the loud local DTMF feedback with quiet tones (see
+      // DTMF_FEEDBACK_SOUNDS).
+      sounds: DTMF_FEEDBACK_SOUNDS,
     });
 
     device.on('registered', () => this._emit());
