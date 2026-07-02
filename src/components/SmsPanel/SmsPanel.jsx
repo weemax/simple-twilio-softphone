@@ -270,51 +270,65 @@ export function SmsPanel() {
   // if nothing is selected. Also: if the selected conversation's message
   // count went up, refresh the thread silently.
   useEffect(() => {
-    if (!snapshot.conversations || snapshot.conversations.length === 0) {
-      if (selected !== null) {
+    const list = snapshot.conversations || [];
+
+    // True if the open thread is the synthesized empty one (server had
+    // no conversation for this number). Used to distinguish "user just
+    // clicked + New" from "the selected conversation was deleted on the
+    // server" — the former should hold the selection, the latter should
+    // fall back to the first conversation in the list.
+    const isUserPickedNew =
+      thread &&
+      Array.isArray(thread.messages) &&
+      thread.messages.length === 0;
+
+    if (list.length === 0) {
+      // No conversations on the server at all. Preserve a "+ New"
+      // selection — the first send will create the real conversation.
+      // Only drop the selection if the open thread has real messages
+      // (which would mean the server lost data out from under us).
+      if (selected !== null && !isUserPickedNew) {
         setSelected(null);
         setThread(null);
       }
       return;
     }
+
     if (selected === null) {
-      setSelected(snapshot.conversations[0].number);
-    } else {
-      const found = snapshot.conversations.find((c) => c.number === selected);
-      if (!found) {
-        // Selected conversation isn't in the list. Two cases:
-        //   (a) User just clicked "+ New" with a number that's never
-        //       been texted → thread is the synthesized empty one. Hold
-        //       the selection; the first send will create the real
-        //       conversation and the next poll will include it.
-        //   (b) Conversation was deleted from the store → fall back to
-        //       the first one in the list.
-        const isUserPickedNew =
-          thread &&
-          Array.isArray(thread.messages) &&
-          thread.messages.length === 0;
-        if (!isUserPickedNew) {
-          setSelected(snapshot.conversations[0].number);
-          setThread(null);
-        }
-      } else if (
-        thread &&
-        thread.messages &&
-        thread.messages.length > 0 &&
-        (found.messageCount > thread.messages.length ||
-          // Status callbacks update an existing message's status without
-          // changing messageCount — refresh anyway so the badge updates.
-          threadHasUnsettledOutbound(thread))
-      ) {
-        // New message arrived, OR an outbound message still has a
-        // status that could update (queued -> sent -> delivered /
-        // failed). Refresh the thread in the background.
-        getThread(selected)
-          .then((t) => setThread(t))
-          .catch(() => {
-            // Silent: don't blow away the existing view on transient error.
-          });
+      setSelected(list[0].number);
+      return;
+    }
+
+    const found = list.find((c) => c.number === selected);
+    if (!found) {
+      // Selected conversation isn't in the list. Two cases:
+      //   (a) User just clicked "+ New" with a number that's never
+      //       been texted → thread is the synthesized empty one. Hold
+      //       the selection; the first send will create the real
+      //       conversation and the next poll will include it.
+      //   (b) Conversation was deleted from the store → fall back to
+      //       the first one in the list.
+      if (!isUserPickedNew) {
+        setSelected(list[0].number);
+        setThread(null);
       }
+    } else if (
+      thread &&
+      thread.messages &&
+      thread.messages.length > 0 &&
+      (found.messageCount > thread.messages.length ||
+        // Status callbacks update an existing message's status without
+        // changing messageCount — refresh anyway so the badge updates.
+        threadHasUnsettledOutbound(thread))
+    ) {
+      // New message arrived, OR an outbound message still has a
+      // status that could update (queued -> sent -> delivered /
+      // failed). Refresh the thread in the background.
+      getThread(selected)
+        .then((t) => setThread(t))
+        .catch(() => {
+          // Silent: don't blow away the existing view on transient error.
+        });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot.conversations]);

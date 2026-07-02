@@ -1,7 +1,10 @@
 import React, { createContext, useContext } from 'react';
 import { useSmsClient } from '../hooks/useSmsClient';
 
-const SmsContext = createContext(null);
+// Exported so tests can mount a mock provider without spinning up the
+// real useSmsClient. App code should prefer useSms() over the raw
+// context object.
+export const SmsContext = createContext(null);
 
 export function SmsProvider({ children }) {
   const client = useSmsClient();
