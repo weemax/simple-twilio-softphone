@@ -34,6 +34,11 @@ const {
   TWILIO_CALLER_ID,
   TWILIO_SMS_FROM, // optional: dedicated sender number; falls back to TWILIO_CALLER_ID
   SMS_STATUS_CALLBACK_URL, // optional: explicit override; otherwise derived
+  // The Twilio Client identity that inbound voice calls should ring. Set to
+  // whatever you used when registering the softphone Device (AccountConfig
+  // form → "Client Identity"). Required for inbound calls; without it,
+  // `/twiml` falls back to a generic message and Twilio hangs up.
+  OPERATOR_IDENTITY,
 } = process.env;
 
 // SMS persistence lives next to the token server so the renderer and the
@@ -214,7 +219,13 @@ async function handleToken(req, res) {
       { identity, ttl: 3600 }
     );
     token.addGrant(
-      new VoiceGrant({ outgoingApplicationSid: TWILIO_TWIML_APP_SID })
+      new VoiceGrant({
+        outgoingApplicationSid: TWILIO_TWIML_APP_SID,
+        // Permit inbound calls to reach this Client identity. Without
+        // this flag Twilio drops inbound connections to the Device even
+        // if TwiML explicitly <Dial>s to the identity.
+        incomingAllow: true,
+      })
     );
 
     return send(res, 200, {
@@ -248,12 +259,45 @@ async function handleTwiml(req, res) {
 
 function renderTwiml(params, res) {
   const to = (params.To || '').toString().trim();
+  const from = (params.From || '').toString().trim();
 
   const { VoiceResponse } = twilio.twiml;
   const response = new VoiceResponse();
 
+  // A single TwiML endpoint serves both directions, so we must tell them
+  // apart:
+  //   - Outbound: our softphone Client placed a call. Twilio presents the
+  //     leg to the TwiML App with From="client:<identity>" and To set to
+  //     the custom destination the client dialed. Route by `To`.
+  //   - Inbound: a PSTN caller (or another client) dialed our Twilio
+  //     number. Twilio sets To=<our Twilio number> and From=<caller>.
+  //     Deliver the call to the operator softphone via <Client>.
+  //
+  // The reliable signal is `From`: only calls our own Client originates
+  // carry the "client:" scheme. An empty-`To` test does NOT work here —
+  // inbound calls arrive with `To` set to the dialed Twilio number, which
+  // otherwise looks exactly like an outbound PSTN destination.
+  const isFromClient = /^client:/i.test(from);
+
+  if (!isFromClient) {
+    // Inbound call to our Twilio number. Route it to the Operator softphone
+    // via the Client identity so the @twilio/voice-sdk Device receives it.
+    // Use the caller's number as callerId so the softphone shows who's
+    // calling; fall back to the configured caller ID if absent.
+    if (OPERATOR_IDENTITY) {
+      const dial = response.dial({ callerId: from || TWILIO_CALLER_ID });
+      dial.client(OPERATOR_IDENTITY);
+      return sendTwiml(res, response);
+    }
+    response.say(
+      'Operator is not configured to receive inbound calls yet. Set OPERATOR_IDENTITY in the token server .env.'
+    );
+    return sendTwiml(res, response);
+  }
+
+  // Outbound call placed by the operator softphone. Route by destination.
   if (!to) {
-    response.say('No destination number was provided.');
+    response.say('No destination specified.');
     return sendTwiml(res, response);
   }
 
