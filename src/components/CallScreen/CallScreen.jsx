@@ -40,7 +40,16 @@ function useDuration(startedAt, active) {
   return Math.floor((now - startedAt) / 1000);
 }
 
-export function CallScreen({ call, onHangup, onMute, muted, onSendDigit }) {
+export function CallScreen({
+  call,
+  onHangup,
+  onMute,
+  muted,
+  onSendDigit,
+  incoming = false,
+  onAccept,
+  onReject,
+}) {
   const duration = useDuration(call?.startedAt, isConnected(call?.status));
   const [showKeypad, setShowKeypad] = useState(true);
   // Local echo of digits the operator has sent, so they get visual feedback
@@ -78,7 +87,7 @@ export function CallScreen({ call, onHangup, onMute, muted, onSendDigit }) {
       </div>
       <div className="number">{other || '—'}</div>
       <div className="status">
-        {LABELS[call.status] || call.status}
+        {incoming ? 'Incoming call…' : LABELS[call.status] || call.status}
         {connected && duration != null && (
           <span className="duration"> · {formatDuration(duration)}</span>
         )}
@@ -106,27 +115,40 @@ export function CallScreen({ call, onHangup, onMute, muted, onSendDigit }) {
       )}
 
       <div className="actions">
-        {connected && (
-          <button
-            type="button"
-            className={showKeypad ? 'keypad on' : 'keypad'}
-            onClick={() => setShowKeypad((v) => !v)}
-          >
-            {showKeypad ? 'Hide keypad' : 'Keypad'}
-          </button>
+        {incoming ? (
+          <>
+            <button type="button" className="answer" onClick={onAccept}>
+              Answer
+            </button>
+            <button type="button" className="hangup" onClick={onReject}>
+              Decline
+            </button>
+          </>
+        ) : (
+          <>
+            {connected && (
+              <button
+                type="button"
+                className={showKeypad ? 'keypad on' : 'keypad'}
+                onClick={() => setShowKeypad((v) => !v)}
+              >
+                {showKeypad ? 'Hide keypad' : 'Keypad'}
+              </button>
+            )}
+            {connected && (
+              <button
+                type="button"
+                className={muted ? 'mute on' : 'mute'}
+                onClick={onMute}
+              >
+                {muted ? 'Unmute' : 'Mute'}
+              </button>
+            )}
+            <button type="button" className="hangup" onClick={onHangup}>
+              Hang up
+            </button>
+          </>
         )}
-        {connected && (
-          <button
-            type="button"
-            className={muted ? 'mute on' : 'mute'}
-            onClick={onMute}
-          >
-            {muted ? 'Unmute' : 'Mute'}
-          </button>
-        )}
-        <button type="button" className="hangup" onClick={onHangup}>
-          Hang up
-        </button>
       </div>
     </div>
   );

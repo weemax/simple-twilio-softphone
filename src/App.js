@@ -170,19 +170,32 @@ function MainPanel() {
             }
           />
         ) : showCallScreen ? (
-          <CallScreen
-            call={
-              snapshot.currentCall
-                ? { ...snapshot.currentCall, direction: 'outgoing' }
-                : { ...snapshot.incomingCall, direction: 'incoming' }
-            }
-            onHangup={hangup}
-            onMute={toggleMute}
-            onSendDigit={sendDigits}
-            muted={
-              (snapshot.currentCall || snapshot.incomingCall)?.muted || false
-            }
-          />
+          (() => {
+            // An unaccepted inbound call lives only in `incomingCall`;
+            // once answered (or when we place an outbound call) it becomes
+            // `currentCall`. Derive direction from Twilio's own Call flag
+            // rather than which slot it's in, so an answered inbound call
+            // stays labeled "Incoming" and shows the caller's number.
+            const activeCall = snapshot.currentCall || snapshot.incomingCall;
+            const isIncomingPending =
+              !snapshot.currentCall && Boolean(snapshot.incomingCall);
+            const dir =
+              String(activeCall?.direction || '').toUpperCase() === 'INCOMING'
+                ? 'incoming'
+                : 'outgoing';
+            return (
+              <CallScreen
+                call={{ ...activeCall, direction: dir }}
+                incoming={isIncomingPending}
+                onAccept={acceptIncoming}
+                onReject={rejectIncoming}
+                onHangup={hangup}
+                onMute={toggleMute}
+                onSendDigit={sendDigits}
+                muted={activeCall?.muted || false}
+              />
+            );
+          })()
         ) : effectiveView === 'messages' ? (
           <SmsPanel />
         ) : (

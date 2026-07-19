@@ -299,6 +299,7 @@ input, select, textarea {
   cursor: pointer;
 }
 .call-screen .actions .hangup { background: var(--danger); color: white; }
+.call-screen .actions .answer { background: var(--success); color: white; }
 .call-screen .actions .mute {
   background: var(--bg-elev-2);
   color: var(--text);
