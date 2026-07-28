@@ -11,7 +11,13 @@
 // an immediate refresh so the local UI shows the new message without
 // waiting for the next tick.
 
+import { notifyInboundSms } from './smsNotifications';
+
 const POLL_MS = 3000;
+// Upper bound on tracked SIDs so a long-running renderer session doesn't
+// grow this set forever. Comfortably larger than any single conversation's
+// server-side history cap (500 messages).
+const MAX_SEEN_INBOUND_IDS = 5000;
 
 export class SmsService {
   constructor() {
@@ -20,6 +26,10 @@ export class SmsService {
     this.lastError = null;
     this._listeners = new Set();
     this._pollTimer = null;
+    // Message SIDs are stable across conversation reordering. Keep this set
+    // for the renderer session so each inbound message alerts at most once.
+    this._seenInboundMessageIds = new Set();
+    this._hasHydrated = false;
     this._emit();
   }
 
@@ -89,12 +99,61 @@ export class SmsService {
     if (!res || !res.ok) {
       throw new Error((res && res.error) || 'list failed');
     }
-    this.conversations = Array.isArray(res.conversations)
+    const conversations = Array.isArray(res.conversations)
       ? res.conversations
       : [];
+    this._detectNewInboundMessages(conversations);
+    this.conversations = conversations;
     this.state = 'ready';
     this.lastError = null;
     this._emit();
+  }
+
+  _inboundMessageKey(number, message) {
+    if (message && message.sid) return String(message.sid);
+    return `${number}:${message?.at || 0}:${message?.body || ''}`;
+  }
+
+  _detectNewInboundMessages(conversations) {
+    const newMessages = [];
+    const currentKeys = new Set();
+    for (const conversation of conversations) {
+      if (!conversation || !Array.isArray(conversation.messages)) continue;
+      for (const message of conversation.messages) {
+        if (!message || message.direction !== 'inbound') continue;
+        const key = this._inboundMessageKey(conversation.number, message);
+        currentKeys.add(key);
+        if (this._hasHydrated && !this._seenInboundMessageIds.has(key)) {
+          newMessages.push({ ...message, number: conversation.number });
+        }
+        // Re-inserting an existing key doesn't reorder it in a Set, so
+        // delete first — this keeps insertion order equal to
+        // last-seen order, making the eviction below a true LRU.
+        this._seenInboundMessageIds.delete(key);
+        this._seenInboundMessageIds.add(key);
+      }
+    }
+
+    // Seed the set during initial hydration without alerting for history
+    // already present when the renderer session starts.
+    this._hasHydrated = true;
+    this._pruneSeenInboundMessageIds(currentKeys);
+    newMessages.forEach((message) => notifyInboundSms(message));
+  }
+
+  _pruneSeenInboundMessageIds(currentKeys) {
+    let excess = this._seenInboundMessageIds.size - MAX_SEEN_INBOUND_IDS;
+    if (excess <= 0) return;
+    // Never evict a SID that's still present in the conversations we
+    // just fetched — only drop ones that have aged out of every
+    // thread's history, so a message still in view can't be
+    // re-notified as "new".
+    for (const id of this._seenInboundMessageIds) {
+      if (excess <= 0) break;
+      if (currentKeys.has(id)) continue;
+      this._seenInboundMessageIds.delete(id);
+      excess--;
+    }
   }
 
   // --- data fetch ---

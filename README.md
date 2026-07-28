@@ -8,6 +8,7 @@ This project is a fork of Kevin Whinnery's abandoned [operator](https://github.c
 
 - **Voice calling** — register a Twilio `Device` (WebRTC) inside Electron, dial a number, place a call, mute, hang up, send in-call DTMF, answer/decline inbound calls
 - **SMS chat** — conversation list, thread view with delivery-status badges, composer. 1:1 threads only, no MMS / group / media
+- **Inbound SMS notifications** — native OS notification + bundled sound on genuinely new inbound messages, deduplicated per session by message SID
 - **Local Node service** — signs Twilio capability tokens, serves TwiML for outbound voice, brokers inbound SMS webhooks, tracks delivery status via Twilio's status callback
 - **Polling-based live updates** — 3s poll from the renderer picks up new inbound messages and status changes
 
@@ -22,6 +23,7 @@ This project is a fork of Kevin Whinnery's abandoned [operator](https://github.c
 | Voice: Operator-to-Operator (Client-to-Client) | server-side `<Dial><Client>` path is implemented, untested end-to-end |
 | SMS: outbound send (composer → Twilio) | working |
 | SMS: inbound webhook (Twilio → server → UI) | working |
+| SMS: inbound notification (native OS alert + sound) | working |
 | SMS: delivery status badges (queued → sent → delivered / failed) | working, **requires `SMS_STATUS_CALLBACK_URL` set in `server/.env`** (see `HANDOFF.md` §3c) |
 | SMS: read receipts, typing indicators, MMS, group threads, search | not implemented (out of scope) |
 | Phone number management UI | not implemented (planned) |
@@ -73,7 +75,8 @@ ELECTRON_IS_DEV=0 npm start
 ```
 ┌────────────────────────────────────────────────────┐
 │ Electron main process (main.js)                    │
-│  - IPC handlers: config, secrets, token, sms       │
+│  - IPC handlers: config, secrets, token,           │
+│    notification, sms                               │
 │  - safeStorage-backed secret store (Keychain)      │
 │  - Token broker + SMS broker (HTTP to local server)│
 └─────────────────┬──────────────────────────────────┘
@@ -84,6 +87,8 @@ ELECTRON_IS_DEV=0 npm start
 │  - SmsProvider (SMS service + 3s polling)         │
 │  - Dialpad / CallControls / CallScreen             │
 │  - SmsPanel (conversation list + thread + composer)│
+│  - smsNotifications (native alert + sound on new   │
+│    inbound SMS)                                    │
 └─────────────────────────────────────────────────────┘
                 ▲
                 │ public webhook (via ngrok)

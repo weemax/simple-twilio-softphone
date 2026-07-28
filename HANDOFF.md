@@ -2,7 +2,7 @@
 
 **Project:** Twilio-powered desktop soft phone (Electron + React)
 **Location:** `/Users/izzy/Projects/WebWolf/twilio-phone`
-**Status:** Voice soft phone end-to-end (UI + Twilio Voice + WebRTC Device + Token broker). SMS chat feature shipped 2026-06-10 — server endpoints, IPC bridge, renderer service, and chat panel UI. Inbound calls now route to the softphone with an Answer/Decline UI, and outbound/inbound Dials preserve ringback via `answerOnBridge` (see §6a). Outbound PSTN calls require the TwiML App's outbound Caller ID to be set in console (see §8a); inbound calls require `OPERATOR_IDENTITY` set in `server/.env` (see §13); SMS requires the inbound webhook URL to be set on a Twilio number (see §3b).
+**Status:** Voice soft phone end-to-end (UI + Twilio Voice + WebRTC Device + Token broker). SMS chat feature shipped 2026-06-10 — server endpoints, IPC bridge, renderer service, and chat panel UI. Inbound calls now route to the softphone with an Answer/Decline UI, and outbound/inbound Dials preserve ringback via `answerOnBridge` (see §6a). Inbound SMS now also triggers a native OS notification + bundled sound (see §10a). Outbound PSTN calls require the TwiML App's outbound Caller ID to be set in console (see §8a); inbound calls require `OPERATOR_IDENTITY` set in `server/.env` (see §13); SMS requires the inbound webhook URL to be set on a Twilio number (see §3b).
 **Original Author:** Kevin Whinnery (forked from kwhinnery/operator, abandoned)
 **Last Updated:** 2026-07-28
 
@@ -148,16 +148,19 @@ To get the `sent` → `delivered` / `failed` badge updates in the panel, the ser
 ┌────────────────────────────────────────────────────┐
 │ Electron main process (main.js)                    │
 │  - BrowserWindow with contextIsolation + preload   │
-│  - IPC handlers: config, secrets, token, sms, app  │
+│  - IPC handlers: config, secrets, token,           │
+│    notification, sms, app                          │
 │  - safeStorage-backed secret store (Keychain)     │
 │  - Token broker (talks to local server)            │
 │  - SMS broker (talks to local server)              │
+│  - Notification handler (native Notification API) │
 └─────────────────┬──────────────────────────────────┘
                   │ IPC (allowlisted channels)
 ┌─────────────────▼──────────────────────────────────┐
 │ Preload (preload.js)                               │
 │  - Exposes window.operator.{config,token,secrets,  │
-│    sms,app,on} to renderer via contextBridge       │
+│    sms,notifications,app,on} to renderer via       │
+│    contextBridge                                   │
 └─────────────────┬──────────────────────────────────┘
                   │ bridged API
 ┌─────────────────▼──────────────────────────────────┐
@@ -168,7 +171,10 @@ To get the `sent` → `delivered` / `failed` badge updates in the panel, the ser
 │  - Dialpad / CallControls / CallScreen             │
 │  - SmsPanel (conversation list, thread, composer)  │
 │  - twilioService.js wraps @twilio/voice-sdk Device │
-│  - smsService.js polls /sms/conversations          │
+│  - smsService.js polls /sms/conversations, detects │
+│    new inbound messages by SID                     │
+│  - smsNotifications.js shows a native notification │
+│    and plays public/notification.wav               │
 └─────────────────────────────────────────────────────┘
 
         ┌────────────────────────┐
@@ -220,7 +226,7 @@ Two channel types:
 |------|---------|
 | `package.json` | Root project. Scripts: `dev`, `start`, `build`, `test`, `token-server`, `dev:all`. |
 | `main.js` | Electron main. Creates window with `contextIsolation: true`, registers all IPC handlers, blocks in-app navigation to external URLs. |
-| `preload.js` | Context-isolated bridge. Exposes `window.operator.{config, token, secrets, sms, app, on}`. Channel allowlists. |
+| `preload.js` | Context-isolated bridge. Exposes `window.operator.{config, token, secrets, sms, notifications, app, on}`. Channel allowlists. |
 | `main/services/secrets.js` | safeStorage wrapper, plaintext fallback. |
 | `main/services/config.js` | Plaintext non-secret config (SID, identity). |
 | `main/services/tokenBroker.js` | Fetches/mints capability tokens. |
@@ -232,7 +238,8 @@ Two channel types:
 | `src/App.js` | Top-level: header, status bar, routing between AccountConfig / dialer / CallScreen / SmsPanel. |
 | `src/App.css` | Dark softphone theme. |
 | `src/services/twilioService.js` | Device wrapper, snapshot pub/sub, token-refresh, mute, DTMF (with quiet local feedback tones), forwards `ringing`/`hasEarlyMedia`/`reconnecting`/`reconnected`, call placement. |
-| `src/services/smsService.js` | SMS service singleton. Pub/sub snapshot, 3s polling, send, getThread. |
+| `src/services/smsService.js` | SMS service singleton. Pub/sub snapshot, 3s polling, send, getThread, inbound-notification detection (dedupes by message SID, capped at `MAX_SEEN_INBOUND_IDS`). |
+| `src/services/smsNotifications.js` | Renderer-side helpers for inbound SMS alerts: plays `public/notification.wav` and calls `window.operator.notifications.show(...)` for a native OS notification. |
 | `src/hooks/useTwilioClient.js` | Singleton hook that owns the TwilioService lifecycle. |
 | `src/hooks/useSmsClient.js` | Singleton hook that owns the SmsService lifecycle. |
 | `src/contexts/TwilioContext.jsx` | React Context wrapper for the hook. |
@@ -244,6 +251,7 @@ Two channel types:
 | `src/components/SmsPanel/SmsPanel.jsx` | SMS chat panel: conversation list, thread view with bubbles + status badges, composer. |
 | `src/components/SmsPanel/SmsPanel.css` | Dark-theme styles for the SMS panel. |
 | `public/index.html`, `public/manifest.json` | App shell metadata. |
+| `public/notification.wav` | Bundled sound played on new inbound SMS. Local asset so alerts don't depend on a network request. |
 | `HANDOFF.md` | This file. |
 
 ---
@@ -317,8 +325,9 @@ Two channel types:
 3. Persists to the store with direction `inbound`, real `sid` from Twilio, status `received`
 4. Returns empty `<Response/>` to Twilio so it doesn't retry
 5. Renderer's `smsService` is polling every 3s; the next poll fetches the updated conversation list
-6. If the user is on the `SmsPanel`, `SmsPanel` detects the new message count in the selected thread and re-fetches the thread in the background
-7. New bubble appears in the thread view with `at` timestamp
+6. `smsService._detectNewInboundMessages` diffs the fetched inbound messages against SIDs already seen this renderer session; any genuinely new one triggers `notifyInboundSms` (`src/services/smsNotifications.js`), which plays `public/notification.wav` and calls `window.operator.notifications.show(...)` to show a native OS notification (`main.js`'s `notification:show` IPC handler, silent so it can't double up with the bundled sound). History already present when the renderer first hydrates is seeded into the seen-set without alerting.
+7. If the user is on the `SmsPanel`, `SmsPanel` detects the new message count in the selected thread and re-fetches the thread in the background
+8. New bubble appears in the thread view with `at` timestamp
 
 **Trust model on inbound:** for v1 the inbound endpoint trusts the tunnel URL (ngrok's URL is unguessable and no secrets are exposed in the response). Twilio webhook signature verification is a v2 item — flagged in the `handleSmsInbound` comment.
 
@@ -345,6 +354,7 @@ Two channel types:
   - Renderer: `SmsService` polls every 3s, `SmsPanel` shows conversation list + thread + composer with status badges
   - Failed outbound sends are persisted as `failed` (visible in UI) instead of vanishing
   - In-app `Voice` / `Messages` tab navigation; active calls always win over the SMS panel
+- **SMS inbound notifications:** native OS notification + bundled sound (`public/notification.wav`) on genuinely new inbound messages; deduped per renderer session by message SID so reordering or re-polling never double-alerts, and history already loaded at session start is not alerted
 
 ## 8. What's known to be broken
 
@@ -421,6 +431,7 @@ End-to-end SMS chat in the `Messages` tab. Programmable SMS via Twilio REST + in
 **What works:**
 - Outbound: composer → IPC → broker → server → Twilio `messages.create` → real SID + status reflected in the bubble
 - Inbound: Twilio POSTs to `/sms/inbound` via ngrok → persisted → next 3s poll surfaces in list + thread
+- Inbound notifications: a genuinely new inbound message triggers a native OS notification + bundled sound (`public/notification.wav`), deduped per session by message SID (see §6b)
 - Delivery receipts: when `SMS_STATUS_CALLBACK_URL` is set, Twilio POSTs to `/sms/status` on every state change; badge updates `queued` → `sent` → `delivered` (or → `failed`/`undelivered`) within ~3s. See §3c.
 - Failed sends are persisted as `failed` (red badge in UI) so they don't vanish
 - Conversations sorted newest-first; 500-msg cap per thread; body capped at 1600 chars (Twilio limit)

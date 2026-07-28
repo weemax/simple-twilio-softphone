@@ -1,5 +1,11 @@
 const path = require('path');
-const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  Notification,
+  ipcMain,
+  shell,
+} = require('electron');
 const isDev = require('electron-is-dev');
 
 const secrets = require('./main/services/secrets');
@@ -72,6 +78,31 @@ function registerIpc() {
     } catch (err) {
       return { ok: false, error: err.message };
     }
+  });
+
+  // Notifications — renderer requests a native notification without gaining
+  // access to Electron or any main-process secrets.
+  ipcMain.handle('notification:show', (_e, payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, error: 'payload required' };
+    }
+    const number =
+      typeof payload.number === 'string' ? payload.number.slice(0, 32) : '';
+    const body =
+      typeof payload.body === 'string' ? payload.body.slice(0, 240) : '';
+    if (!body) return { ok: false, error: 'body required' };
+    if (!Notification.isSupported()) {
+      return { ok: false, error: 'notifications unavailable' };
+    }
+    const notification = new Notification({
+      title: number ? `New SMS from ${number}` : 'New SMS',
+      body,
+      // The renderer plays the bundled sound so native notification audio
+      // cannot produce a second alert.
+      silent: true,
+    });
+    notification.show();
+    return { ok: true };
   });
 
   // SMS — list and send. Inbound webhook is server-side only (no IPC).
