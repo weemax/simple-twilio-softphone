@@ -35,14 +35,21 @@ export function CallControls({
     );
   }
 
-  if (callState === 'connected' || callState === 'connecting' || callState === 'ringing') {
+  const connected = callState === 'open' || callState === 'connected';
+
+  if (
+    connected ||
+    callState === 'connecting' ||
+    callState === 'ringing' ||
+    callState === 'reconnecting'
+  ) {
     return (
       <div className="call-controls active">
         <button
           type="button"
           className={muted ? 'mute on' : 'mute'}
           onClick={onMute}
-          disabled={callState !== 'connected'}
+          disabled={!connected}
         >
           {muted ? 'Unmute' : 'Mute'}
         </button>

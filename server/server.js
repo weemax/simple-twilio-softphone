@@ -9,7 +9,9 @@
 //   TWILIO_API_SECRET      — the secret shown when the API Key was created
 //   TWILIO_TWIML_APP_SID   — a Voice TwiML App SID (starts with AP…)
 
-require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+if (require.main === module) {
+  require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+}
 
 // Optional:
 //   PORT                   — default 5050
@@ -304,12 +306,18 @@ function renderTwiml(params, res) {
   if (/^[A-Za-z0-9_\-]{1,64}$/.test(to)) {
     // Operator-to-Operator (Client) call. callerId is required for Client
     // originations, even when both legs are clients.
-    const dial = response.dial({ callerId: TWILIO_CALLER_ID });
+    const dial = response.dial({
+      callerId: TWILIO_CALLER_ID,
+      answerOnBridge: true,
+    });
     dial.client(to);
   } else if (/^\+?[0-9\s\-\(\)]{1,32}$/.test(to)) {
     // PSTN call. Pass the configured caller ID; Twilio rejects the call
     // with 31005 if this is missing on a Client-originated call.
-    const dial = response.dial({ callerId: TWILIO_CALLER_ID });
+    const dial = response.dial({
+      callerId: TWILIO_CALLER_ID,
+      answerOnBridge: true,
+    });
     dial.number(to);
   } else {
     response.say('Invalid destination format.');
@@ -617,26 +625,30 @@ function handleSmsList(req, res) {
   return send(res, 200, { conversations: smsStore.listConversations() });
 }
 
-requireEnv();
-server.listen(PORT, HOST, () => {
-  console.log(
-    `[token-server] listening on http://${HOST}:${PORT} ` +
-      `(account ${TWILIO_ACCOUNT_SID.slice(0, 6)}…)`
-  );
-  console.log(
-    `[token-server] sms store: ${SMS_STORE_PATH}` +
-      (TWILIO_SMS_FROM || TWILIO_CALLER_ID
-        ? ` · sender: ${TWILIO_SMS_FROM || TWILIO_CALLER_ID}`
-        : ' · sender: NOT CONFIGURED (sms/send will 500)')
-  );
-  const cb = getStatusCallbackUrl();
-  if (cb) {
-    console.log(`[token-server] sms status callback: ${cb}`);
-  } else {
+module.exports = { renderTwiml };
+
+if (require.main === module) {
+  requireEnv();
+  server.listen(PORT, HOST, () => {
     console.log(
-      '[token-server] sms status callback: NOT CONFIGURED ' +
-        '(set SMS_PUBLIC_BASE_URL or SMS_STATUS_CALLBACK_URL — ' +
-        'outbound status will stay at queued/sent)'
+      `[token-server] listening on http://${HOST}:${PORT} ` +
+        `(account ${TWILIO_ACCOUNT_SID.slice(0, 6)}…)`
     );
-  }
-});
+    console.log(
+      `[token-server] sms store: ${SMS_STORE_PATH}` +
+        (TWILIO_SMS_FROM || TWILIO_CALLER_ID
+          ? ` · sender: ${TWILIO_SMS_FROM || TWILIO_CALLER_ID}`
+          : ' · sender: NOT CONFIGURED (sms/send will 500)')
+    );
+    const cb = getStatusCallbackUrl();
+    if (cb) {
+      console.log(`[token-server] sms status callback: ${cb}`);
+    } else {
+      console.log(
+        '[token-server] sms status callback: NOT CONFIGURED ' +
+          '(set SMS_PUBLIC_BASE_URL or SMS_STATUS_CALLBACK_URL — ' +
+          'outbound status will stay at queued/sent)'
+      );
+    }
+  });
+}

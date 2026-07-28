@@ -17,7 +17,7 @@ function StatusBar({ snapshot, accountSid }) {
     tone = 'error';
   } else if (snapshot.currentCall) {
     label = `In call — ${snapshot.currentCall.status}`;
-    tone = 'active';
+    tone = snapshot.currentCall.status === 'ringing' ? 'ringing' : 'active';
   } else if (snapshot.incomingCall) {
     label = 'Incoming call';
     tone = 'ringing';
@@ -84,7 +84,11 @@ function MainPanel() {
 
   // Send dialpad digits to an active call (in-call DTMF).
   useEffect(() => {
-    if (snapshot.currentCall && snapshot.currentCall.status === 'connected') {
+    if (
+      snapshot.currentCall &&
+      (snapshot.currentCall.status === 'open' ||
+        snapshot.currentCall.status === 'connected')
+    ) {
       // No-op: handled in onKeyPress below so digits only go out when tapped
       // during an active call. This effect is here in case future logic
       // needs to react to call-state changes.
@@ -100,7 +104,11 @@ function MainPanel() {
 
   const handleKeyPress = useCallback(
     (digit) => {
-      if (snapshot.currentCall && snapshot.currentCall.status === 'connected') {
+      if (
+        snapshot.currentCall &&
+        (snapshot.currentCall.status === 'open' ||
+          snapshot.currentCall.status === 'connected')
+      ) {
         sendDigits(digit);
       }
     },

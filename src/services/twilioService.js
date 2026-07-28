@@ -132,6 +132,7 @@ export class TwilioService {
       from: call.parameters?.From || null,
       direction: call.direction,
       status: call.status(),
+      hasEarlyMedia: call.__hasEarlyMedia ?? null,
       muted: call.isMuted(),
       startedAt: call.__startedAt || null,
     };
@@ -205,7 +206,20 @@ export class TwilioService {
     }
   }
 
+  _watchCallState(call) {
+    if (call.__twilioServiceStateListenersAttached) return;
+    call.__twilioServiceStateListenersAttached = true;
+
+    call.on('ringing', (hasEarlyMedia) => {
+      call.__hasEarlyMedia = hasEarlyMedia;
+      this._emit();
+    });
+    call.on('reconnecting', () => this._emit());
+    call.on('reconnected', () => this._emit());
+  }
+
   _onIncoming(call) {
+    this._watchCallState(call);
     this.incomingCall = call;
     this._emit();
     call.on('accept', () => this._setCurrentCall(call));
@@ -228,6 +242,7 @@ export class TwilioService {
   }
 
   _setCurrentCall(call) {
+    this._watchCallState(call);
     this.currentCall = call;
     call.__startedAt = Date.now();
     call.on('accept', () => {
