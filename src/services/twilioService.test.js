@@ -1,8 +1,8 @@
+import { TwilioService } from './twilioService';
+
 jest.mock('@twilio/voice-sdk', () => ({
   Device: jest.fn(),
 }));
-
-import { TwilioService } from './twilioService';
 
 class FakeCall {
   constructor(status = 'connecting') {
