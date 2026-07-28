@@ -6,7 +6,7 @@ This project is a fork of Kevin Whinnery's abandoned [operator](https://github.c
 
 ## What's in the box
 
-- **Voice calling** — register a Twilio `Device` (WebRTC) inside Electron, dial a number, place a call, mute, hang up, send DTMF
+- **Voice calling** — register a Twilio `Device` (WebRTC) inside Electron, dial a number, place a call, mute, hang up, send in-call DTMF, answer/decline inbound calls
 - **SMS chat** — conversation list, thread view with delivery-status badges, composer. 1:1 threads only, no MMS / group / media
 - **Local Node service** — signs Twilio capability tokens, serves TwiML for outbound voice, brokers inbound SMS webhooks, tracks delivery status via Twilio's status callback
 - **Polling-based live updates** — 3s poll from the renderer picks up new inbound messages and status changes
@@ -17,8 +17,8 @@ This project is a fork of Kevin Whinnery's abandoned [operator](https://github.c
 |---|---|
 | Electron app boots (dev + prod) | working |
 | Voice: device registration + outbound PSTN dial | working, **requires TwiML App outbound Caller ID set in console** (see `HANDOFF.md` §8a) |
-| Voice: in-call UI (mute, hangup, DTMF) | working |
-| Voice: inbound call ringer | wired, not exercised against a real inbound number |
+| Voice: in-call UI (mute, hangup, DTMF keypad) | working |
+| Voice: inbound call routing + Answer/Decline UI | implemented, **requires `OPERATOR_IDENTITY` set in `server/.env`** (see `server/README.md`); not exercised against a real inbound number |
 | Voice: Operator-to-Operator (Client-to-Client) | server-side `<Dial><Client>` path is implemented, untested end-to-end |
 | SMS: outbound send (composer → Twilio) | working |
 | SMS: inbound webhook (Twilio → server → UI) | working |

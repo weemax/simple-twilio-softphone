@@ -42,6 +42,13 @@ You can get all four values from the Twilio console:
 - `TWILIO_API_SECRET` — shown once when you create the API key
 - `TWILIO_TWIML_APP_SID` — create a Voice TwiML App; copy its SID (AP…)
 
+Also required if you want inbound calls to ring the app:
+
+- `OPERATOR_IDENTITY` — the Twilio Client identity to dial for inbound
+  calls. Must match the "Client Identity" entered in the app's Configure
+  form. Without this, `/twiml` tells inbound callers the operator isn't
+  configured and hangs up.
+
 ### .env.example
 
 ```env
@@ -51,6 +58,8 @@ TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TWILIO_API_KEY=SKxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TWILIO_API_SECRET=your_api_secret_here
 TWILIO_TWIML_APP_SID=APxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_CALLER_ID=+1xxxxxxxxxx
+OPERATOR_IDENTITY=operator-username
 ```
 
 ## Endpoints
@@ -78,18 +87,35 @@ Response:
 }
 ```
 
+The grant also sets `incomingAllow: true`, so the softphone `Device` can
+receive inbound calls, not just place outbound ones.
+
 Errors are JSON `{ "error": "…" }` with a 4xx/5xx status.
 
 ### `GET|POST /twiml`
 
-Returns TwiML for outbound (and inbound) calls. Reads the `To` parameter
-from either the query string (GET) or a form-encoded body (POST) and
-emits:
+Returns TwiML for both directions, distinguished by `From`: only calls the
+softphone itself originates carry a `client:` scheme, so that's the
+reliable signal (an empty `To` is not — inbound calls also arrive with
+`To` set to the dialed Twilio number).
 
-- `<Dial><Client>{to}</Client></Dial>` if `to` looks like a Client identity
-  (Operator→Operator, no PSTN)
-- `<Dial><Number>{to}</Number></Dial>` if `to` looks like a phone number
-- `<Response><Say>…</Say></Response>` for anything else
+- **Outbound** (`From` starts with `client:`) — routes by `To`:
+  - `<Dial answerOnBridge="true"><Client>{to}</Client></Dial>` if `to`
+    looks like a Client identity (Operator→Operator, no PSTN)
+  - `<Dial answerOnBridge="true"><Number>{to}</Number></Dial>` if `to`
+    looks like a phone number
+  - `<Response><Say>…</Say></Response>` for anything else
+
+  `answerOnBridge` delays Twilio's "answered" signal until the far end
+  actually picks up, so the caller keeps hearing ringback instead of the
+  call appearing connected while it's still ringing.
+
+- **Inbound** (`From` does not start with `client:`) — a PSTN caller (or
+  another client) dialed the Twilio number. Routes to the operator
+  softphone: `<Dial><Client>{OPERATOR_IDENTITY}</Client></Dial>`, with the
+  caller's own number as `callerId` (falls back to `TWILIO_CALLER_ID` if
+  absent). If `OPERATOR_IDENTITY` isn't set, the caller hears a message
+  saying the operator isn't configured yet.
 
 Set this URL as the Voice URL of your TwiML App in the Twilio console.
 For inbound calls to a real phone number, also point the number's "A

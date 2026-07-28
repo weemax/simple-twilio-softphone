@@ -2,9 +2,9 @@
 
 **Project:** Twilio-powered desktop soft phone (Electron + React)
 **Location:** `/Users/izzy/Projects/WebWolf/twilio-phone`
-**Status:** Voice soft phone end-to-end (UI + Twilio Voice + WebRTC Device + Token broker). SMS chat feature shipped 2026-06-10 — server endpoints, IPC bridge, renderer service, and chat panel UI. Outbound PSTN calls require the TwiML App's outbound Caller ID to be set in console (see §8a); SMS requires the inbound webhook URL to be set on a Twilio number (see §3b).
+**Status:** Voice soft phone end-to-end (UI + Twilio Voice + WebRTC Device + Token broker). SMS chat feature shipped 2026-06-10 — server endpoints, IPC bridge, renderer service, and chat panel UI. Inbound calls now route to the softphone with an Answer/Decline UI, and outbound/inbound Dials preserve ringback via `answerOnBridge` (see §6a). Outbound PSTN calls require the TwiML App's outbound Caller ID to be set in console (see §8a); inbound calls require `OPERATOR_IDENTITY` set in `server/.env` (see §13); SMS requires the inbound webhook URL to be set on a Twilio number (see §3b).
 **Original Author:** Kevin Whinnery (forked from kwhinnery/operator, abandoned)
-**Last Updated:** 2026-06-10
+**Last Updated:** 2026-07-28
 
 ---
 
@@ -227,11 +227,11 @@ Two channel types:
 | `main/services/smsBroker.js` | HTTP client to local server's `/sms/*` endpoints. Mirrors tokenBroker pattern. |
 | `server/server.js` | Local Node service. `POST /token` (localhost), `GET\|POST /twiml` (public via ngrok), `POST /sms/send` + `GET /sms/conversations` (localhost), `POST /sms/inbound` + `POST /sms/status` (public via ngrok), `GET /health`. |
 | `server/smsStore.js` | JSON-backed conversation store. E.164 keyed, 500-msg cap, atomic write. Exposes `updateMessageBySid` for status callbacks. |
-| `server/.env.example` | Documents the required env vars (now includes optional `TWILIO_SMS_FROM`). |
+| `server/.env.example` | Documents the required env vars (now includes optional `TWILIO_SMS_FROM` and `OPERATOR_IDENTITY`). |
 | `server/README.md` | Server-specific setup, security notes. |
 | `src/App.js` | Top-level: header, status bar, routing between AccountConfig / dialer / CallScreen / SmsPanel. |
 | `src/App.css` | Dark softphone theme. |
-| `src/services/twilioService.js` | Device wrapper, snapshot pub/sub, token-refresh, mute, DTMF, call placement. |
+| `src/services/twilioService.js` | Device wrapper, snapshot pub/sub, token-refresh, mute, DTMF (with quiet local feedback tones), forwards `ringing`/`hasEarlyMedia`/`reconnecting`/`reconnected`, call placement. |
 | `src/services/smsService.js` | SMS service singleton. Pub/sub snapshot, 3s polling, send, getThread. |
 | `src/hooks/useTwilioClient.js` | Singleton hook that owns the TwilioService lifecycle. |
 | `src/hooks/useSmsClient.js` | Singleton hook that owns the SmsService lifecycle. |
@@ -240,7 +240,7 @@ Two channel types:
 | `src/components/AccountConfig/AccountConfig.jsx` | SID + Auth Token form. Auth Token goes into safeStorage. |
 | `src/components/Dialpad/Dialpad.jsx` | 12-key keypad, backspace, in-call DTMF. |
 | `src/components/CallControls/CallControls.jsx` | Call / hangup / mute / accept / reject buttons. |
-| `src/components/CallScreen/CallScreen.jsx` | Live call UI with duration timer. |
+| `src/components/CallScreen/CallScreen.jsx` | Live call UI with duration timer, in-call DTMF keypad, and incoming Answer/Decline UI. |
 | `src/components/SmsPanel/SmsPanel.jsx` | SMS chat panel: conversation list, thread view with bubbles + status badges, composer. |
 | `src/components/SmsPanel/SmsPanel.css` | Dark-theme styles for the SMS panel. |
 | `public/index.html`, `public/manifest.json` | App shell metadata. |
@@ -254,12 +254,46 @@ Two channel types:
 2. `App.js` calls `placeCall(number)` from `useTwilioClient`
 3. `twilioService.placeCall` calls `device.connect({ params: { To: number } })`
 4. Twilio Voice SDK establishes WebRTC, Twilio creates an outbound call
-5. Twilio POSTs to the TwiML App's Voice URL (our ngrok `/twiml`)
+5. Twilio POSTs to the TwiML App's Voice URL (our ngrok `/twiml`), with
+   `From` set to `client:{identity}` — that's how `handleTwiml` tells this
+   apart from an inbound call (see §6a)
 6. `server.js` `handleTwiml` reads `To` from POST body or query string, emits:
-   - `<Dial><Client>{to}</Client></Dial>` if `to` matches the safe-identifier regex (Operator→Operator, not yet implemented)
-   - `<Dial><Number>{to}</Number></Dial>` if `to` looks like a phone number
-7. Twilio dials the number, connects the WebRTC call
-8. Renderer sees `Call.status === 'connected'`, duration timer starts
+   - `<Dial answerOnBridge="true"><Client>{to}</Client></Dial>` if `to` matches the safe-identifier regex (Operator→Operator; server-side path implemented, see §8c)
+   - `<Dial answerOnBridge="true"><Number>{to}</Number></Dial>` if `to` looks like a phone number
+7. Twilio dials the number/client. Because `answerOnBridge` is set, Twilio
+   keeps playing ringback to our caller until the far end actually
+   answers, instead of marking the call answered as soon as the far leg
+   starts ringing
+8. Renderer's `TwilioService` forwards the SDK's `ringing` event (and
+   `hasEarlyMedia`) into the snapshot, so the UI shows "Ringing…" during
+   step 7. Once the far end answers, `Call.status()` becomes `'open'`
+   (the SDK's status for an active call — `twilioService`/`CallScreen`/
+   `CallControls` all treat `'open'` and the legacy `'connected'` the
+   same), and the duration timer starts
+
+## 6a. How a call flows (inbound)
+
+1. A PSTN caller (or another Twilio Client) dials the Twilio number
+2. Twilio POSTs to the same TwiML App Voice URL (`/twiml`). Since `From`
+   does **not** start with `client:`, `handleTwiml` routes this as inbound
+   rather than outbound (an empty `To` is not a reliable signal — inbound
+   calls arrive with `To` set to the dialed Twilio number)
+3. `server.js` emits `<Dial><Client>{OPERATOR_IDENTITY}</Client></Dial>`,
+   with `callerId` set to the caller's own number (falls back to
+   `TWILIO_CALLER_ID`). If `OPERATOR_IDENTITY` isn't configured, the
+   caller hears a message instead and the call ends
+4. This requires the `/token` grant's `incomingAllow: true` (set in
+   `handleToken`) — without it Twilio drops the inbound leg to the
+   Device even though the TwiML explicitly `<Dial>`s to the identity
+5. The renderer's `Device` fires `incoming`; `TwilioService` stores the
+   call as `incomingCall` and forwards `ringing`/`hasEarlyMedia` the same
+   way as outbound calls
+6. `App.js` renders `CallScreen` with `incoming={true}`, showing
+   **Answer**/**Decline** instead of the normal in-call controls
+7. Accepting moves the call from `incomingCall` to `currentCall`;
+   `CallScreen` derives the `incoming`/`outgoing` label from the SDK's own
+   `direction` flag (not which state slot the call is in), so an answered
+   inbound call keeps showing as "Incoming" with the caller's number
 
 ## 6b. How SMS flows (outbound + inbound)
 
@@ -302,6 +336,9 @@ Two channel types:
 - Outbound call reaches Twilio, hits `/twiml`, returns valid TwiML (verified in ngrok logs: `POST /twiml 200 OK`)
 - Cancel button on Reconfigure screen (was missing — added)
 - Defensive coercion on `config.get()` (was returning objects — fixed)
+- Inbound call routing (`/twiml` → `<Dial><Client>{OPERATOR_IDENTITY}</Client></Dial>`, `/token` → `incomingAllow: true`) and the Answer/Decline `CallScreen` UI — covered by regression tests (`serverTwiml.test.js`, `twilioService.test.js`, `CallScreen.test.js`) but not exercised against a real inbound number (see §8e)
+- Outbound and Client-to-Client `<Dial>` now sets `answerOnBridge="true"` so callers keep hearing ringback instead of the call appearing connected while the far end is still ringing; `ringing`/`hasEarlyMedia`/`reconnecting`/`reconnected` are forwarded through `TwilioService` snapshots and reflected in the UI (see §6, §6a)
+- In-call DTMF keypad on `CallScreen`, with the SDK's loud local feedback tones replaced by quiet ones (`twilioService.js` `DTMF_FEEDBACK_SOUNDS`)
 - **SMS chat end-to-end (108 passing assertions across 3 layers):**
   - Server: `POST /sms/inbound` webhook persists with real Twilio SID; `POST /sms/send` persists optimistic + updates on success/failure; `GET /sms/conversations` returns list + single-thread shape
   - IPC: main broker hits the server, preload bridge exposes `window.operator.sms.list/send`
@@ -360,7 +397,7 @@ The `server.js` `handleTwiml` will emit `<Dial><Client>…</Client></Dial>` if `
 
 ### 8e. Incoming call UI
 
-The `incomingCall` state in `twilioService.js` is wired up and the `incoming` prop flows to `CallControls` (which shows Accept/Reject), but this has not been tested end-to-end because no inbound number has been configured.
+The `incomingCall` state in `twilioService.js` is wired up, `handleTwiml`/`handleToken` now route real inbound calls to the operator's Client identity (see §6a), and the `incoming` prop flows to `CallScreen` (which shows Answer/Decline) and `CallControls`. This is covered by regression tests, but still has not been tested end-to-end against a real inbound number, and requires `OPERATOR_IDENTITY` to be set in `server/.env` (see §13).
 
 ---
 
@@ -372,6 +409,8 @@ These bugs were hit and fixed during the build-out. If you see these symptoms, t
 - **"Configure → save → reconfigure → no Cancel button".** Clicking Reconfigure showed the form with no way back to the dialer without re-saving. **Fix:** Cancel button added to AccountConfig; only shown when there's already a saved config.
 - **`/twiml` not matching the TwiML App's URL.** User pasted the bare ngrok URL (no path); server returned 404; Twilio played "We are sorry" generic error. **Fix:** server now serves TwiML at both `/` and `/twiml`. Use `/twiml` for the production URL.
 - **`.env` not loaded by Node.** `node server/server.js` doesn't read `.env` automatically. **Fix:** `dotenv` added as a server dep, `require('dotenv').config(...)` at the top of `server.js`.
+- **Inbound calls never reached the softphone.** `/twiml` had no inbound branch and `/token`'s `VoiceGrant` didn't allow incoming calls, so Twilio dropped any call placed to the Twilio number. **Fix:** `handleTwiml` now detects direction via `From` (`client:` prefix = outbound) and dials `<Client>{OPERATOR_IDENTITY}</Client>` for inbound; `/token` now sets `incomingAllow: true`.
+- **Outbound calls appeared "connected" while still ringing.** `<Dial>` had no `answerOnBridge`, so Twilio's default behavior treated the call as answered as soon as the far leg started ringing — the caller heard nothing (no ringback) before the far end actually picked up, and `CallControls`/`CallScreen` only recognized the SDK's legacy `'connected'` status, not the current `'open'`. **Fix:** `answerOnBridge: true` added to outbound PSTN and Client `<Dial>`s; `TwilioService` forwards the SDK's `ringing`/`reconnecting`/`reconnected` events into snapshots; UI components treat `'open'` the same as `'connected'`.
 
 ---
 
@@ -401,7 +440,7 @@ End-to-end SMS chat in the `Messages` tab. Programmable SMS via Twilio REST + in
 ## 10b. Roadmap (still planned, in rough priority order)
 
 1. **Phone number management UI** — search/buy/release via Twilio's IncomingPhoneNumbers API. Will need a new IPC channel + main-side service.
-2. **Inbound call audio** — ringer/notification on the OS when `incoming` fires. Electron's `Notification` API or a custom audio element.
+2. **Inbound call audio** — OS-level ringer/notification when `incoming` fires (the in-app routing + Answer/Decline UI is implemented, see §6a; this item is specifically about an audible/OS alert so the operator notices a call while the app isn't focused). Electron's `Notification` API or a custom audio element.
 3. **Operator-to-Operator VoIP** — `<Dial><Client>` path is wired in server.js, just untested. Needs a way to know which identities are online.
 4. **Operator-to-Operator chat & video** — would need Twilio Conversations + Video SDKs, both new deps.
 5. **Distribution** — `electron-builder` for macOS/Windows/Linux installers. Not in package.json yet.
@@ -464,6 +503,7 @@ node --check server.js        # Syntax check
 | `server/.env` | `PORT` | default 5050 |
 | `server/.env` | `HOST` | default 127.0.0.1 |
 | `server/.env` | `TWILIO_CALLER_ID` | Verified Twilio number, used as `<Dial callerId>` (see §8a) and as fallback for outbound SMS |
+| `server/.env` | `OPERATOR_IDENTITY` | Twilio Client identity that inbound calls should ring; must match the "Client Identity" entered in the app's Configure form. Required for inbound calls (see §6a, §8e) |
 | `server/.env` | `TWILIO_SMS_FROM` | **Optional.** Dedicated sender for outbound SMS; falls back to `TWILIO_CALLER_ID`. Set this if voice and SMS numbers differ. |
 | `server/.env` | `SMS_STORE_PATH` | **Optional.** Override the conversation-store JSON path. Default `<server dir>/sms-store.json`. |
 | `server/.env` | `SMS_STATUS_CALLBACK_URL` | **Optional.** Full URL Twilio should POST to on delivery status changes (e.g. `https://YOUR-DOMAIN.ngrok-free.app/sms/status`). See §3c. |
