@@ -5,7 +5,6 @@ const {
   Notification,
   ipcMain,
   shell,
-  dialog,
 } = require('electron');
 const isDev = require('electron-is-dev');
 
