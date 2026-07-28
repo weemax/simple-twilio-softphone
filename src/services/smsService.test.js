@@ -11,18 +11,92 @@
 
 import { SmsService } from './smsService';
 
-function makeFakeOperator({ listHandler }) {
+function makeFakeOperator({ listHandler, notificationsShow = () => Promise.resolve({ ok: true }) }) {
   global.window = global.window || {};
   global.window.operator = {
     sms: {
       list: listHandler,
       send: () => Promise.resolve({ ok: true }),
     },
+    notifications: { show: notificationsShow },
   };
 }
 
 afterEach(() => {
   delete global.window;
+  delete global.Audio;
+});
+
+describe('SmsService inbound notification detection', () => {
+  it('skips initial hydration and alerts each new inbound message once despite reordering', async () => {
+    let conversations = [
+      {
+        number: '+15550000001',
+        messages: [
+          { sid: 'SM-old-a', direction: 'inbound', body: 'old a', at: 1 },
+        ],
+      },
+      {
+        number: '+15550000002',
+        messages: [
+          { sid: 'SM-old-b', direction: 'inbound', body: 'old b', at: 2 },
+        ],
+      },
+    ];
+    const show = jest.fn(() => Promise.resolve({ ok: true }));
+    const play = jest.fn(() => Promise.resolve());
+    const AudioMock = jest.fn(() => ({ volume: 1, play }));
+    global.Audio = AudioMock;
+    global.window = global.window || {};
+    global.window.Audio = AudioMock;
+    makeFakeOperator({
+      listHandler: () => Promise.resolve({ ok: true, conversations }),
+      notificationsShow: show,
+    });
+
+    const svc = new SmsService();
+    await svc._refresh(); // Existing history is the baseline, not an alert.
+    expect(show).not.toHaveBeenCalled();
+    expect(AudioMock).not.toHaveBeenCalled();
+
+    // Polling may reorder conversations without changing message identity.
+    conversations = [conversations[1], conversations[0]];
+    await svc._refresh();
+    expect(show).not.toHaveBeenCalled();
+
+    const newMessage = {
+      sid: 'SM-new',
+      direction: 'inbound',
+      body: 'new inbound',
+      at: 3,
+    };
+    conversations = [
+      {
+        ...conversations[0],
+        messages: [newMessage, ...conversations[0].messages],
+      },
+      conversations[1],
+    ];
+    await svc._refresh();
+    expect(show).toHaveBeenCalledTimes(1);
+    expect(show).toHaveBeenCalledWith({
+      number: '+15550000002',
+      body: 'new inbound',
+    });
+    expect(AudioMock).toHaveBeenCalledTimes(1);
+
+    // A later poll can reorder messages too; the SID prevents replay.
+    conversations = [
+      {
+        ...conversations[0],
+        messages: [...conversations[0].messages].reverse(),
+      },
+      conversations[1],
+    ];
+    await svc._refresh();
+    expect(show).toHaveBeenCalledTimes(1);
+    expect(AudioMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('SmsService.getThread', () => {

@@ -11,6 +11,8 @@
 // an immediate refresh so the local UI shows the new message without
 // waiting for the next tick.
 
+import { notifyInboundSms } from './smsNotifications';
+
 const POLL_MS = 3000;
 
 export class SmsService {
@@ -20,6 +22,10 @@ export class SmsService {
     this.lastError = null;
     this._listeners = new Set();
     this._pollTimer = null;
+    // Message SIDs are stable across conversation reordering. Keep this set
+    // for the renderer session so each inbound message alerts at most once.
+    this._seenInboundMessageIds = new Set();
+    this._hasHydrated = false;
     this._emit();
   }
 
@@ -89,12 +95,39 @@ export class SmsService {
     if (!res || !res.ok) {
       throw new Error((res && res.error) || 'list failed');
     }
-    this.conversations = Array.isArray(res.conversations)
+    const conversations = Array.isArray(res.conversations)
       ? res.conversations
       : [];
+    this._detectNewInboundMessages(conversations);
+    this.conversations = conversations;
     this.state = 'ready';
     this.lastError = null;
     this._emit();
+  }
+
+  _inboundMessageKey(number, message) {
+    if (message && message.sid) return String(message.sid);
+    return `${number}:${message?.at || 0}:${message?.body || ''}`;
+  }
+
+  _detectNewInboundMessages(conversations) {
+    const newMessages = [];
+    for (const conversation of conversations) {
+      if (!conversation || !Array.isArray(conversation.messages)) continue;
+      for (const message of conversation.messages) {
+        if (!message || message.direction !== 'inbound') continue;
+        const key = this._inboundMessageKey(conversation.number, message);
+        if (this._hasHydrated && !this._seenInboundMessageIds.has(key)) {
+          newMessages.push({ ...message, number: conversation.number });
+        }
+        this._seenInboundMessageIds.add(key);
+      }
+    }
+
+    // Seed the set during initial hydration without alerting for history
+    // already present when the renderer session starts.
+    this._hasHydrated = true;
+    newMessages.forEach((message) => notifyInboundSms(message));
   }
 
   // --- data fetch ---

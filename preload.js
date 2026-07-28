@@ -23,6 +23,8 @@ const INVOKABLE_CHANNELS = new Set([
   'secrets:set',
   'secrets:get',
   'secrets:clear',
+  // Notifications (renderer -> main native notification)
+  'notification:show',
   // SMS (renderer -> main -> local server)
   'sms:list',
   'sms:send',
@@ -67,6 +69,12 @@ const api = {
     set: (key, value) => ipcRenderer.invoke('secrets:set', { key, value }),
     get: (key) => ipcRenderer.invoke('secrets:get', key),
     clear: (key) => ipcRenderer.invoke('secrets:clear', key),
+  },
+
+  notifications: {
+    // payload: { number: '+1…', body: '…' }.
+    // Returns { ok: true } or { ok: false, error }.
+    show: (payload) => ipcRenderer.invoke('notification:show', payload),
   },
 
   sms: {
