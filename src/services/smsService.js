@@ -116,14 +116,20 @@ export class SmsService {
 
   _detectNewInboundMessages(conversations) {
     const newMessages = [];
+    const currentKeys = new Set();
     for (const conversation of conversations) {
       if (!conversation || !Array.isArray(conversation.messages)) continue;
       for (const message of conversation.messages) {
         if (!message || message.direction !== 'inbound') continue;
         const key = this._inboundMessageKey(conversation.number, message);
+        currentKeys.add(key);
         if (this._hasHydrated && !this._seenInboundMessageIds.has(key)) {
           newMessages.push({ ...message, number: conversation.number });
         }
+        // Re-inserting an existing key doesn't reorder it in a Set, so
+        // delete first — this keeps insertion order equal to
+        // last-seen order, making the eviction below a true LRU.
+        this._seenInboundMessageIds.delete(key);
         this._seenInboundMessageIds.add(key);
       }
     }
@@ -131,16 +137,22 @@ export class SmsService {
     // Seed the set during initial hydration without alerting for history
     // already present when the renderer session starts.
     this._hasHydrated = true;
-    this._pruneSeenInboundMessageIds();
+    this._pruneSeenInboundMessageIds(currentKeys);
     newMessages.forEach((message) => notifyInboundSms(message));
   }
 
-  _pruneSeenInboundMessageIds() {
-    const excess = this._seenInboundMessageIds.size - MAX_SEEN_INBOUND_IDS;
+  _pruneSeenInboundMessageIds(currentKeys) {
+    let excess = this._seenInboundMessageIds.size - MAX_SEEN_INBOUND_IDS;
     if (excess <= 0) return;
-    const ids = this._seenInboundMessageIds.values();
-    for (let i = 0; i < excess; i++) {
-      this._seenInboundMessageIds.delete(ids.next().value);
+    // Never evict a SID that's still present in the conversations we
+    // just fetched — only drop ones that have aged out of every
+    // thread's history, so a message still in view can't be
+    // re-notified as "new".
+    for (const id of this._seenInboundMessageIds) {
+      if (excess <= 0) break;
+      if (currentKeys.has(id)) continue;
+      this._seenInboundMessageIds.delete(id);
+      excess--;
     }
   }
 
