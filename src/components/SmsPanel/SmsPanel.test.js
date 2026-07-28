@@ -169,10 +169,6 @@ describe('SmsPanel "+ New" selection preservation across polls', () => {
       await Promise.resolve();
     });
 
-    // Debug: dump what we see
-    // eslint-disable-next-line no-console
-    console.log('post-poll container:', container.innerHTML.slice(0, 2000));
-
     // The selection should still be intact after the poll.
     expect($(container, '.sms-panel-thread-number')).toBeTruthy();
     expect($(container, '.sms-composer-input').disabled).toBe(false);

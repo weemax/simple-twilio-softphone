@@ -14,6 +14,10 @@
 import { notifyInboundSms } from './smsNotifications';
 
 const POLL_MS = 3000;
+// Upper bound on tracked SIDs so a long-running renderer session doesn't
+// grow this set forever. Comfortably larger than any single conversation's
+// server-side history cap (500 messages).
+const MAX_SEEN_INBOUND_IDS = 5000;
 
 export class SmsService {
   constructor() {
@@ -127,7 +131,17 @@ export class SmsService {
     // Seed the set during initial hydration without alerting for history
     // already present when the renderer session starts.
     this._hasHydrated = true;
+    this._pruneSeenInboundMessageIds();
     newMessages.forEach((message) => notifyInboundSms(message));
+  }
+
+  _pruneSeenInboundMessageIds() {
+    const excess = this._seenInboundMessageIds.size - MAX_SEEN_INBOUND_IDS;
+    if (excess <= 0) return;
+    const ids = this._seenInboundMessageIds.values();
+    for (let i = 0; i < excess; i++) {
+      this._seenInboundMessageIds.delete(ids.next().value);
+    }
   }
 
   // --- data fetch ---
