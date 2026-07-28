@@ -241,16 +241,16 @@ async function handleToken(req, res) {
   }
 }
 
-// TwiML response for outbound calls placed by the Operator client.
-// Twilio POSTs to this URL with form-encoded params (or GETs with query
-// string); we ignore the body and just emit TwiML based on the `To`
-// parameter the client passed when it dialed.
+// TwiML response for both outbound calls placed by the Operator client and
+// inbound calls to the Twilio number. Twilio POSTs to this URL with
+// form-encoded params (or GETs with query string); direction is told apart
+// by `From` (see the isFromClient check in renderTwiml below).
 //
-// Routing rules:
+// Routing rules (outbound only; inbound always dials OPERATOR_IDENTITY):
 //   - If `To` looks like a Client identity (matches the safe identifier
-//     regex), emit <Dial><Client>…</Client></Dial> (Operator→Operator).
+//     regex), emit <Dial answerOnBridge><Client>…</Client></Dial> (Operator→Operator).
 //   - If `To` looks like a phone number (E.164-ish: +, digits, spaces,
-//     parens, dashes), emit <Dial>…</Dial> (PSTN).
+//     parens, dashes), emit <Dial answerOnBridge>…</Dial> (PSTN).
 //   - Otherwise 400 with an error TwiML so Twilio reads the message.
 //
 // The VoiceResponse helper escapes user input safely.
