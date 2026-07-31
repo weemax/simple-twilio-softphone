@@ -56,6 +56,7 @@ typings/
 
 # dotenv environment variables file
 .env
+.env.bak-*
 
 # SMS conversation store (contains message bodies — never commit)
 server/sms-store.json
@@ -83,6 +84,15 @@ server/sms-store.json.tmp
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Agent notes — may contain live credentials, never commit
+NEXT-AGENT-NOTE.md
+
+# Recovery runbooks — may contain live credentials
+docs/recovering-from-twilio-20101.md
+
+# Snapshot/test data (noise in diffs)
+.snapshots/
 
 npm-debug.log*
 yarn-debug.log*
