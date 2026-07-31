@@ -3,6 +3,7 @@
 **Project:** Twilio-powered desktop soft phone (Electron + React)
 **Location:** `/Users/izzy/Projects/WebWolf/twilio-phone`
 **Status:** Voice soft phone end-to-end (UI + Twilio Voice + WebRTC Device + Token broker). SMS chat feature shipped 2026-06-10 — server endpoints, IPC bridge, renderer service, and chat panel UI. Inbound calls now route to the softphone with an Answer/Decline UI, and outbound/inbound Dials preserve ringback via `answerOnBridge` (see §6a). Inbound SMS now also triggers a native OS notification + bundled sound (see §10a). Outbound PSTN calls require the TwiML App's outbound Caller ID to be set in console (see §8a); inbound calls require `OPERATOR_IDENTITY` set in `server/.env` (see §13); SMS requires the inbound webhook URL to be set on a Twilio number (see §3b).
+**Recent updates:** Inbound PSTN ringing wired (2026-07-19, see §15). API-key rotation recovery documented (2026-07-19, see §16).
 **Original Author:** Kevin Whinnery (forked from kwhinnery/operator, abandoned)
 **Last Updated:** 2026-07-28
 
@@ -514,7 +515,7 @@ node --check server.js        # Syntax check
 | `server/.env` | `PORT` | default 5050 |
 | `server/.env` | `HOST` | default 127.0.0.1 |
 | `server/.env` | `TWILIO_CALLER_ID` | Verified Twilio number, used as `<Dial callerId>` (see §8a) and as fallback for outbound SMS |
-| `server/.env` | `OPERATOR_IDENTITY` | Twilio Client identity that inbound calls should ring; must match the "Client Identity" entered in the app's Configure form. Required for inbound calls (see §6a, §8e) |
+| `server/.env` | `OPERATOR_IDENTITY` | **Required for inbound calls (added 2026-07-19).** The Twilio Client identity that inbound PSTN calls ring. Must match whatever identity the renderer registers with in the AccountConfig form. The TwiML App's inbound branch emits `<Dial><Client>{OPERATOR_IDENTITY}</Client></Dial>`. If unset, `/twiml` falls back to a `say`/hangup. |
 | `server/.env` | `TWILIO_SMS_FROM` | **Optional.** Dedicated sender for outbound SMS; falls back to `TWILIO_CALLER_ID`. Set this if voice and SMS numbers differ. |
 | `server/.env` | `SMS_STORE_PATH` | **Optional.** Override the conversation-store JSON path. Default `<server dir>/sms-store.json`. |
 | `server/.env` | `SMS_STATUS_CALLBACK_URL` | **Optional.** Full URL Twilio should POST to on delivery status changes (e.g. `https://YOUR-DOMAIN.ngrok-free.app/sms/status`). See §3c. |
@@ -522,6 +523,123 @@ node --check server.js        # Syntax check
 | main process | `TOKEN_BACKEND_URL` | override default `http://127.0.0.1:5050/token` |
 | main process | `SMS_BACKEND_URL` | **Optional.** Override default `http://127.0.0.1:5050` for the SMS broker. |
 | main process | `TWILIO_*` (4 vars) | enable direct-mint mode in `tokenBroker.js` (currently broken — see §8d) |
+
+---
+
+## 15. Inbound calls — wiring (added 2026-07-19)
+
+Inbound was previously stubbed (state wired, never tested). Three pieces connect to make ringing work end-to-end:
+
+**1. Server-side (already in `server/server.js` HEAD):**
+
+```js
+// handleToken (server.js ~line 207) — VoiceGrant includes incoming.allow:
+new VoiceGrant({
+  outgoingApplicationSid: TWILIO_TWIML_APP_SID,
+  incomingAllow: true,
+})
+
+// renderTwiml (server.js ~line 249) — inbound branch:
+if (!to) {  // no `To` param = Twilio POSTing the number's voiceUrl
+  if (OPERATOR_IDENTITY) {
+    const dial = response.dial({ callerId: from || TWILIO_CALLER_ID });
+    dial.client(OPERATOR_IDENTITY);
+    return sendTwiml(res, response);
+  }
+  response.say('Operator is not configured to receive inbound calls yet.');
+  return sendTwiml(res, response);
+}
+```
+
+`OPERATOR_IDENTITY` is a new env var (see §13). For this account it's `operator-izzy`.
+
+**2. Twilio Console wiring (user did, verified):**
+
+- TwiML App `AP290878306ff5250fb3d846c49cd80847` (operator-softphone) — `voice_url = https://big-glider-clean.ngrok-free.app/twiml`
+- Phone number `PN265dd7eae8850ba8f7c93d7063e70a16` (+1 508 978-5987) — `voiceApplicationSid = AP290878306ff5250fb3d846c49cd80847`
+
+**3. Renderer-side:**
+
+`@twilio/voice-sdk`'s `Device` must register with Twilio's signaling using a JWT that grants `incoming.allow=true`. The Device emits `registered` when its registration completes; that does **not** mean the WebRTC media leg is alive. If subsequent inbound calls show `answered_by: null` in Twilio's call log, the WS is not actually open.
+
+**Symptoms when wiring breaks:**
+
+| Where | Symptom | Cause |
+|---|---|---|
+| Twilio call log | `direction: inbound`, `answered_by: null`, `errorCode: undefined`, `duration: 0` | Device leg never connects. Stale JWT, identity mismatch, or stale WS. |
+| Softphone DevTools console | Nothing logged; no Network request | Renderer's `device.on('incoming')` listener never fired → WS is closed or Device isn't registered. |
+| ngrok inspection | `POST /twiml 200 OK` | Backend path is fine; failure is downstream of Twilio fetching the TwiML. |
+| Softphone DevTools console | `Twilio.errors.AccessTokenInvalid (20101)` | `.env` references dead API Key. See §16. |
+
+**Failure mode commonly hit:**
+
+After every `server/.env` or Twilio-credential change, fully quit (Cmd+Q) and re-launch the softphone — `Cmd+R` in Electron keeps the WS alive on a stale token. The Device SDK considers itself "registered" but carries the prior JWT's grant set.
+
+If "fully quit + re-launch" doesn't fix it, rotate the API Key (§16).
+
+## 16. API-key rotation recovery (added 2026-07-19)
+
+The Auth Token can be used to create a new API Key via Twilio's REST API — useful when `.env` references a deleted/unknown API Key.
+
+**Symptoms this procedure solves:**
+
+- Twilio Logs shows `code:20404` for `/Accounts/{SID}/Keys/{KID}.json` or `/Accounts/{SID}/Applications/{APID}.json`.
+- Softphone shows `Twilio was unable to validate your Access Token (20101)` even after a server restart.
+- `dotenv` reports all four `TWILIO_*` env vars are populated, but the API Key SID doesn't start with `SK…` (common silent-misconfig: the Auth Token was pasted into the API Key slot).
+
+**Procedure:**
+
+```bash
+cd server
+ASID=$(awk -F= '$1=="TWILIO_ACCOUNT_SID"{print $2}' .env | tr -d '\r')
+AT=$(awk -F=   '$1=="TWILIO_AUTH_TOKEN" {print $2}' .env | tr -d '\r')
+
+# 1. Create a new API Key. Capture sid (SK…) and secret (shown ONCE).
+KEY_JSON=$(curl -sS -u "${ASID}:${AT}" -X POST \
+  "https://api.twilio.com/2010-04-01/Accounts/${ASID}/Keys.json" \
+  --data-urlencode "FriendlyName=operator-softphone-$(date +%s)")
+echo "$KEY_JSON"   # save sid + secret
+
+# 2. Create (or reuse) a TwiML App with voiceUrl pointing at the tunnel.
+APP_JSON=$(curl -sS -u "${ASID}:${AT}" -X POST \
+  "https://api.twilio.com/2010-04-01/Accounts/${ASID}/Applications.json" \
+  --data-urlencode "FriendlyName=operator-softphone-$(date +%s)" \
+  --data-urlencode "VoiceUrl=https://YOUR-NGROK-URL/twiml" \
+  --data-urlencode "VoiceMethod=POST")
+echo "$APP_JSON"   # save sid (AP…)
+
+# 3. Update server/.env with the new values (line 3, 5, 6 in the active block).
+cp .env .env.bak-$(date +%Y%m%d-%H%M%S)
+sed -i '' 's|^TWILIO_API_KEY=.*|TWILIO_API_KEY=SK_NEW|' .env
+sed -i '' 's|^TWILIO_API_SECRET=.*|TWILIO_API_SECRET=NEW_SECRET|' .env
+sed -i '' 's|^TWILIO_TWIML_APP_SID=.*|TWILIO_TWIML_APP_SID=AP_NEW|' .env
+
+# 4. Restart the token server. Then Reconfigure (or fully quit + re-launch) the softphone.
+pkill -f "node server/server.js"
+npm run dev:all
+```
+
+**Diagnostic probe (run before rotating — confirms whether the failure is here):**
+
+```bash
+cd server
+ASID=$(awk -F= '$1=="TWILIO_ACCOUNT_SID"{print $2}' .env | tr -d '\r')
+AT=$(awk -F=   '$1=="TWILIO_AUTH_TOKEN" {print $2}' .env | tr -d '\r')
+KID=$(awk -F= '$1=="TWILIO_API_KEY"    {print $2}' .env | tr -d '\r')
+AID=$(awk -F= '$1=="TWILIO_TWIML_APP_SID"{print $2}' .env | tr -d '\r')
+curl -sS -u "${ASID}:${AT}" -o /dev/null -w "API Key   %{http_code}\n" \
+  "https://api.twilio.com/2010-04-01/Accounts/${ASID}/Keys/${KID}.json"
+curl -sS -u "${ASID}:${AT}" -o /dev/null -w "TwiML App %{http_code}\n" \
+  "https://api.twilio.com/2010-04-01/Accounts/${ASID}/Applications/${AID}.json"
+```
+
+Both should return `200`. `404` on either means that resource is dead, and rotating fixes it.
+
+**Why a server restart alone never fixes it:** `dotenv` reads `.env` synchronously at module load (`server.js:12`). Editing the file and restarting signs with the same wrong values if those values are still wrong. Always verify with the probe first.
+
+**Scopes gotcha:** `POST /2010-04-01/Keys.json` (unscoped) returns `404` on the OneLeg account. The scoped form `POST .../Accounts/{SID}/Keys.json` works. Same for `Applications`. Use the scoped form.
+
+**This account's current state (2026-07-19 verification):** Run the diagnostic probe above to get current live values. Do not hard-code SIDs in documentation.
 
 ---
 
