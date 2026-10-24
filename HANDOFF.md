@@ -3,7 +3,7 @@
 **Project:** Twilio-powered desktop soft phone (Electron + React)
 **Location:** `/Users/izzy/Projects/WebWolf/twilio-phone`
 **Status:** Voice soft phone end-to-end (UI + Twilio Voice + WebRTC Device + Token broker). SMS chat feature shipped 2026-06-10 — server endpoints, IPC bridge, renderer service, and chat panel UI. Inbound calls now route to the softphone with an Answer/Decline UI, and outbound/inbound Dials preserve ringback via `answerOnBridge` (see §6a). Inbound SMS now also triggers a native OS notification + bundled sound (see §10a). Outbound PSTN calls require the TwiML App's outbound Caller ID to be set in console (see §8a); inbound calls require `OPERATOR_IDENTITY` set in `server/.env` (see §13); SMS requires the inbound webhook URL to be set on a Twilio number (see §3b). Every Twilio webhook must carry a valid Twilio signature, which needs `TWILIO_AUTH_TOKEN` and `PUBLIC_BASE_URL` in `server/.env` (see §3).
-**Recent updates:** Inbound PSTN ringing wired (2026-07-19, see §15). API-key rotation recovery documented (2026-07-19, see §16). Twilio webhook signatures checked on `/twiml`, `/sms/inbound` and `/sms/status` (2026-10-24, see §3). One-command startup with `npm run phone` (2026-10-24, see §2 and "Accepted phone UX work — launcher piece").
+**Recent updates:** Inbound PSTN ringing wired (2026-07-19, see §15). API-key rotation recovery documented (2026-07-19, see §16). Twilio webhook signatures checked on `/twiml`, `/sms/inbound` and `/sms/status` (2026-10-24, see §3). One-command startup with `npm run phone` (2026-10-24, see §2 and "Accepted phone UX work — launcher piece"). Reviewed in-app Twilio setup (2026-10-24, see "Accepted phone UX work — Twilio setup piece").
 **Original Author:** Kevin Whinnery (forked from kwhinnery/operator, abandoned)
 **Last Updated:** 2026-10-24
 
@@ -42,11 +42,10 @@ through tunnels. Notification clicks use the allowlisted `sms:open` push channel
 
 All five accepted pieces and actual submitted values are recorded in
 [`docs/phone-ux-plan.md`](docs/phone-ux-plan.md). This piece does not ship the launcher,
-reviewed Twilio setup, photos or manual queue. Do not confuse the old form below
-with the pending reviewed account-setup flow. The form's existing token read-back
-remains until that separate piece replaces it; do not access real stored secrets in
-tests. Unrelated unpublished `tests/truhome/` and `tools/sms-agent-harness/` work stays
-in the adopted folder unchanged and is not folded into this PR.
+reviewed Twilio setup, photos or manual queue (each has its own section below or is
+still to come). Do not access real stored secrets in tests. Unrelated unpublished
+`tests/truhome/` and `tools/sms-agent-harness/` work stays in the adopted folder
+unchanged and is not folded into this PR.
 
 ## Accepted phone UX work — launcher piece
 
@@ -88,6 +87,46 @@ service, the React dev server, ngrok and Electron, and supervises them:
 Tests: `src/launcher.test.js` (real `server/server.js`, stand-ins in
 `launcher/test-fakes/` for React, Electron and ngrok; no real tunnel),
 `src/sessionStatus.test.js`, `src/workspace/ConnectionPanel.test.js`.
+
+## Accepted phone UX work — Twilio setup piece
+
+Settings → Twilio account (`src/setup/TwilioSetup.jsx`) replaces the old Configure form:
+Account → Number → Review → Connected. An unconnected first launch opens it by itself;
+every other launch restores the last section. `server/setup.js` (in the token server,
+which already owns `server/.env`) does the Twilio work over private `/setup/*` routes,
+reached through `main/services/setupBroker.js` and the allowlisted `setup:*` IPC
+channels. The renderer cannot read, write or clear a secret: `secrets:*` is gone from
+`preload.js` and `main.js`, and no setup answer carries the Auth Token or an API secret
+(presence only). An Auth Token an earlier version saved through `main/services/secrets.js`
+is left exactly as it was: not read, migrated or deleted.
+
+- **Credentials**: `server/.env` stays the single owner-only store (`server/envFile.js`
+  rewrites it atomically and keeps other lines). `server/config.js` reloads it after
+  setup writes, so nothing needs a restart; a value in the process environment (what
+  `npm run phone` uses for the tunnel address) still wins over the file.
+- **Check account** is one read-only request (the account's numbers); invalid credentials
+  and an unreachable Twilio are reported separately. **Review** is read-only and lists
+  every key/app/voice/SMS/callback/identity/sender change. **Connect** creates or reuses
+  one API key and one TwiML App named `Operator softphone [<OPERATOR_INSTALL_ID>]`, and
+  points only the chosen number's voice and text routes at that application. A foreign
+  route is replaced only when its own Replace control was ticked, bound to the exact
+  destination reviewed. Never buys a number; never touches other numbers, keys, apps,
+  Messaging Services, billing or A2P.
+- **Idempotent and repairable**: connecting twice writes nothing; a failed step is named
+  and Retry resumes; on every start `startRepair()` replaces a deleted/rejected key (old
+  Operator key removed only after the new one works), recreates a deleted application,
+  follows tunnel-address changes and reports (never changes) foreign or cleared routes.
+  Only after the person has connected through setup; its result lives in
+  `server/.operator-setup.json` (no secrets) and feeds Settings → Connection, which now
+  shows account, incoming calls, incoming texts, delivery callback and photo capability
+  as separate rows.
+- **Launcher**: missing Twilio settings are now a note, not a reason to refuse the
+  launch, and the service starts without them (`/token` and `/sms/send` answer `409`).
+
+Tests: `src/setup.test.js` and `src/serverSetupRoutes.test.js` (real service and
+tunnel-shaped proxy against `tools/fake-twilio`, a fictional Twilio on 127.0.0.1),
+`src/setup/TwilioSetup.test.js`, `src/workspace/ConnectionPanel.test.js`, and
+`tools/workspace-ui/desktop-setup-journey.cjs` (actual Electron preload/IPC/broker/service).
 
 ## 2. Quick Start
 
@@ -158,7 +197,8 @@ Twilio's webhook servers need a public HTTPS URL pointing at your local `/twiml`
 `npm run phone` starts ngrok itself (`ngrok http 127.0.0.1:5050`), reads the address
 it assigned and passes it to the token server, so step 1 below is not needed then.
 ngrok assigns every account's dev domain automatically; nobody types it. Steps 2–4
-(the Twilio console URLs) are still manual until the reviewed in-app setup piece.
+(the Twilio console URLs) are now done by Settings → Twilio account for Operator's own
+application and the chosen number.
 
 Started by hand instead:
 
@@ -272,7 +312,7 @@ To get the `sent` → `delivered` / `failed` badge updates in the panel, the ser
 │ React renderer (src/)                              │
 │  - TwilioProvider context (Device singleton)       │
 │  - SmsProvider context (SMS service + 3s polling)  │
-│  - AccountConfig → encrypts Auth Token             │
+│  - TwilioSetup → Settings → Twilio account         │
 │  - Dialpad / CallControls / CallScreen             │
 │  - SmsPanel (conversation list, thread, composer)  │
 │  - twilioService.js wraps @twilio/voice-sdk Device │
@@ -315,7 +355,7 @@ Two channel types:
 
 ### Secret storage
 
-`main/services/secrets.js` uses Electron `safeStorage` (macOS Keychain, Windows DPAPI, libsecret on Linux). If safeStorage is unavailable, secrets fall back to a plaintext JSON file at `<userData>/secrets/store.json` with a warning logged. The renderer never sees the Auth Token; only the resulting JWT crosses the IPC boundary.
+Twilio credentials live only in `server/.env` (owner-only, written by the in-app setup). The renderer has no channel that reads, writes or clears a stored secret, and no answer from the setup service contains the Auth Token or an API secret; only the resulting JWT crosses the IPC boundary. `main/services/secrets.js` (Electron `safeStorage`) is no longer connected to any IPC channel; an Auth Token an earlier version saved there is not read, migrated or deleted.
 
 ### Token broker
 
@@ -361,7 +401,10 @@ Two channel types:
 | `src/hooks/useSmsClient.js` | Singleton hook that owns the SmsService lifecycle. |
 | `src/contexts/TwilioContext.jsx` | React Context wrapper for the hook. |
 | `src/contexts/SmsContext.jsx` | React Context wrapper for the SMS hook. |
-| `src/components/AccountConfig/AccountConfig.jsx` | SID + Auth Token form. Auth Token goes into safeStorage. |
+| `src/setup/TwilioSetup.jsx`, `setupService.js`, `useSetupStatus.js` | Settings → Twilio account: Account → Number → Review → Connected. Talks only to `window.operator.setup`. |
+| `server/setup.js`, `twilioApi.js`, `config.js`, `envFile.js` | Check/review/connect/repair against Twilio; reloadable settings; owner-only `server/.env` writer. |
+| `main/services/setupBroker.js` | Validates setup input from the renderer and forwards it to the private `/setup/*` routes. |
+| `tools/fake-twilio/` | A fictional Twilio on 127.0.0.1 for tests and journeys. |
 | `src/components/Dialpad/Dialpad.jsx` | 12-key keypad, backspace, in-call DTMF. |
 | `src/components/CallControls/CallControls.jsx` | Call / hangup / mute / accept / reject buttons. |
 | `src/components/CallScreen/CallScreen.jsx` | Live call UI with duration timer, in-call DTMF keypad, and incoming Answer/Decline UI. |
@@ -456,7 +499,7 @@ Two channel types:
 - React build is clean (`CI=true npm run build`)
 - Tests pass (`npm test`)
 - Token server boots, signs real JWTs against your Twilio creds
-- AccountConfig saves SID + identity to `config.json`, Auth Token to safeStorage
+- In-app setup saves the account, key, application, number and identity to `server/.env` (owner-only)
 - Re-launch persistence (credentials survive quit/reopen)
 - Device registers with Twilio (status bar goes green "Ready")
 - Outbound call reaches Twilio, hits `/twiml`, returns valid TwiML (verified in ngrok logs: `POST /twiml 200 OK`)
@@ -532,7 +575,7 @@ The `incomingCall` state in `twilioService.js` is wired up, `handleTwiml`/`handl
 
 These bugs were hit and fixed during the build-out. If you see these symptoms, the fix is already in:
 
-- **`config.set/get` IPC signature mismatch.** Renderer called `set(cfg)` (one arg), main expected `set(key, value)` (two args). Result: state held raw objects, identity shown as `[object Object]`. **Fix:** `preload.js` now passes `(key, value)`; App.js and AccountConfig both read whole config object and coerce to string defensively.
+- **`config.set/get` IPC signature mismatch.** Renderer called `set(cfg)` (one arg), main expected `set(key, value)` (two args). Result: state held raw objects, identity shown as `[object Object]`. **Fix:** `preload.js` now passes `(key, value)`; App.js and the old AccountConfig form both read whole config object and coerce to string defensively.
 - **"Configure → save → reconfigure → no Cancel button".** Clicking Reconfigure showed the form with no way back to the dialer without re-saving. **Fix:** Cancel button added to AccountConfig; only shown when there's already a saved config.
 - **`/twiml` not matching the TwiML App's URL.** User pasted the bare ngrok URL (no path); server returned 404; Twilio played "We are sorry" generic error. **Fix:** server now serves TwiML at both `/` and `/twiml`. Use `/twiml` for the production URL.
 - **`.env` not loaded by Node.** `node server/server.js` doesn't read `.env` automatically. **Fix:** `dotenv` added as a server dep, `require('dotenv').config(...)` at the top of `server.js`.
@@ -631,7 +674,7 @@ node --check server.js        # Syntax check
 | `server/.env` | `PORT` | default 5050 |
 | `server/.env` | `HOST` | default 127.0.0.1 |
 | `server/.env` | `TWILIO_CALLER_ID` | Verified Twilio number, used as `<Dial callerId>` (see §8a) and as fallback for outbound SMS |
-| `server/.env` | `OPERATOR_IDENTITY` | **Required for inbound calls (added 2026-07-19).** The Twilio Client identity that inbound PSTN calls ring. Must match whatever identity the renderer registers with in the AccountConfig form. The TwiML App's inbound branch emits `<Dial><Client>{OPERATOR_IDENTITY}</Client></Dial>`. If unset, `/twiml` falls back to a `say`/hangup. |
+| `server/.env` | `OPERATOR_IDENTITY` | **Required for inbound calls (added 2026-07-19).** The Twilio Client identity that inbound PSTN calls ring. The in-app setup saves it and registers the app with the same identity. The TwiML App's inbound branch emits `<Dial><Client>{OPERATOR_IDENTITY}</Client></Dial>`. If unset, `/twiml` falls back to a `say`/hangup. |
 | `server/.env` | `TWILIO_SMS_FROM` | **Optional.** Dedicated sender for outbound SMS; falls back to `TWILIO_CALLER_ID`. Set this if voice and SMS numbers differ. |
 | `server/.env` | `SMS_STORE_PATH` | **Optional.** Override the conversation-store JSON path. Default `<server dir>/sms-store.json`. |
 | `server/.env` | `TWILIO_AUTH_TOKEN` | **Required for Twilio's webhooks (added 2026-10-24).** The account's primary Auth Token. Used only to check `X-Twilio-Signature` on `/twiml`, `/sms/inbound` and `/sms/status`; without it every webhook gets 503. See §3. |

@@ -9,7 +9,12 @@
 // webhooks must also carry a valid Twilio signature: see
 // checkTwilioSignature.
 //
-// Required env (set in `server/.env` or the parent shell):
+// The in-app setup (Settings → Twilio account, server/setup.js) writes these
+// settings to `server/.env`; they can also be set by hand there or in the
+// parent shell. The service starts without them so the app can open its setup;
+// until they exist /token and /sms/send answer 409.
+//
+// Settings:
 //   TWILIO_ACCOUNT_SID     — starts with AC…
 //   TWILIO_API_KEY         — starts with SK…
 //   TWILIO_API_SECRET      — the secret shown when the API Key was created
@@ -21,6 +26,10 @@
 //                            every webhook request with it
 //   PUBLIC_BASE_URL        — the public address Twilio calls, e.g.
 //                            https://YOUR-DOMAIN.ngrok-free.app
+
+// The environment this process started with, before server/.env is read: it
+// wins over server/.env, so `npm run phone` can supply the tunnel's address.
+const launchEnv = { ...process.env };
 
 if (require.main === module) {
   require('dotenv').config({ path: require('path').join(__dirname, '.env') });
@@ -42,6 +51,8 @@ const http = require('http');
 const path = require('path');
 const twilio = require('twilio');
 const { SmsStore, normalizeNumber, MAX_BODY_LENGTH } = require('./smsStore');
+const { createConfig } = require('./config');
+const { createSetup, SetupError } = require('./setup');
 const {
   generateKey,
   writeKeyFile,
@@ -56,41 +67,30 @@ const LAUNCH_ID = /^[A-Za-z0-9_-]{1,64}$/.test(process.env.OPERATOR_LAUNCH_ID ||
   ? process.env.OPERATOR_LAUNCH_ID
   : null;
 
-const {
-  TWILIO_ACCOUNT_SID,
-  TWILIO_API_KEY,
-  TWILIO_API_SECRET,
-  TWILIO_TWIML_APP_SID,
-  TWILIO_CALLER_ID,
-  TWILIO_SMS_FROM, // optional: dedicated sender number; falls back to TWILIO_CALLER_ID
-  SMS_STATUS_CALLBACK_URL, // optional: explicit override; otherwise derived
-  // The Twilio Client identity that inbound voice calls should ring. Set to
-  // whatever you used when registering the softphone Device (AccountConfig
-  // form → "Client Identity"). Required for inbound calls; without it,
-  // `/twiml` falls back to a generic message and Twilio hangs up.
-  OPERATOR_IDENTITY,
-  // Only used to check Twilio's webhook signatures. Tokens and SMS sends
-  // keep using the API key above.
-  TWILIO_AUTH_TOKEN,
-} = process.env;
-
-// The public base URL Twilio calls this server on (the tunnel's address,
-// no trailing slash), or null when unset or not an http(s) URL. Twilio
-// signs the exact URL it requested, and behind a tunnel this server only
-// sees the local one, so the public address has to come from config.
-// SMS_PUBLIC_BASE_URL is the older name for the same setting.
-function resolvePublicBaseUrl() {
-  const raw = process.env.PUBLIC_BASE_URL || process.env.SMS_PUBLIC_BASE_URL;
-  if (!raw) return null;
-  try {
-    const parsed = new URL(raw);
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
-  } catch (_) {
-    return null;
-  }
-  return raw.replace(/\/+$/, '');
-}
-const PUBLIC_BASE_URL = resolvePublicBaseUrl();
+// Where this service's settings live: server/.env when it was started
+// directly, or the file OPERATOR_ENV_FILE names (tests, the desktop test
+// launcher). Without one, setup has nowhere to save and refuses to run.
+const ENV_FILE =
+  process.env.OPERATOR_ENV_FILE ||
+  (require.main === module ? path.join(__dirname, '.env') : null);
+const serverConfig = createConfig({ launchEnv, envFile: ENV_FILE });
+// The current settings. Read again after the in-app setup writes server/.env,
+// so nothing here needs a restart. Settings: accountSid, apiKey, apiSecret,
+// twimlAppSid, callerId, smsFrom (optional dedicated sender), statusCallbackUrl
+// (optional override), identity (the Twilio Client identity inbound calls
+// ring; the app registers as the same one), authToken (only used to check
+// Twilio's webhook signatures; tokens and SMS sends use the API key) and
+// publicBaseUrl (the address Twilio calls: signatures cover the exact URL, and
+// behind a tunnel this server only sees the local one).
+const cfg = () => serverConfig.get();
+const setup = createSetup({
+  config: serverConfig,
+  statePath: ENV_FILE
+    ? process.env.OPERATOR_SETUP_STATE_FILE || path.join(path.dirname(ENV_FILE), '.operator-setup.json')
+    : null,
+  env: process.env,
+  log: (m) => console.log(`[setup] ${m}`),
+});
 
 // SMS persistence lives next to the token server so the renderer and the
 // webhook can both read it. Override with SMS_STORE_PATH for tests.
@@ -103,56 +103,58 @@ const smsStore = new SmsStore(SMS_STORE_PATH);
 // requires a publicly reachable URL — in dev that's the ngrok tunnel plus
 // the public /sms/status path. In prod it could be a stable hostname.
 function getStatusCallbackUrl() {
-  if (SMS_STATUS_CALLBACK_URL) return SMS_STATUS_CALLBACK_URL;
+  if (cfg().statusCallbackUrl) return cfg().statusCallbackUrl;
   // Default to the same host as the inbound webhook: rely on the env to
   // provide a public base, or fail closed (don't register a callback).
-  if (PUBLIC_BASE_URL) return PUBLIC_BASE_URL + '/sms/status';
+  if (cfg().publicBaseUrl) return cfg().publicBaseUrl + '/sms/status';
   return null; // not configured — handleSmsSend will skip statusCallback
 }
 
-function requireEnv() {
+// Settings the token and SMS routes need, still missing. The service starts
+// anyway: the in-app setup (Settings → Twilio account) fills them in.
+function missingSettings() {
+  const c = cfg();
   const missing = [];
-  if (!TWILIO_ACCOUNT_SID) missing.push('TWILIO_ACCOUNT_SID');
-  if (!TWILIO_API_KEY) missing.push('TWILIO_API_KEY');
-  if (!TWILIO_API_SECRET) missing.push('TWILIO_API_SECRET');
-  if (!TWILIO_TWIML_APP_SID) missing.push('TWILIO_TWIML_APP_SID');
+  if (!c.accountSid) missing.push('TWILIO_ACCOUNT_SID');
+  if (!c.apiKey) missing.push('TWILIO_API_KEY');
+  if (!c.apiSecret) missing.push('TWILIO_API_SECRET');
+  if (!c.twimlAppSid) missing.push('TWILIO_TWIML_APP_SID');
+  return missing;
+}
+
+function startupNotes() {
+  const c = cfg();
+  const notes = [];
+  const missing = missingSettings();
   if (missing.length) {
-    console.error(
-      '[token-server] Missing required env vars: ' + missing.join(', ')
+    notes.push(
+      `Twilio is not connected yet (missing ${missing.join(', ')}): calls and texts are unavailable ` +
+        'until you finish Settings → Twilio account in the app. See server/README.md.'
     );
-    console.error(
-      '[token-server] See server/README.md for setup instructions.'
-    );
-    process.exit(1);
-  }
-  if (!TWILIO_CALLER_ID) {
-    console.warn(
-      '[token-server] TWILIO_CALLER_ID not set — outbound calls will fail ' +
-        'with 31005. Add a verified Twilio number to server/.env.'
+  } else if (!c.callerId) {
+    notes.push(
+      'TWILIO_CALLER_ID not set — outbound calls will fail with 31005. Choose a number in ' +
+        'Settings → Twilio account, or add a verified Twilio number to server/.env.'
     );
   }
-  if (
-    PUBLIC_BASE_URL &&
-    SMS_STATUS_CALLBACK_URL &&
-    !SMS_STATUS_CALLBACK_URL.startsWith(PUBLIC_BASE_URL + '/sms/status')
-  ) {
-    console.warn(
-      `[token-server] SMS_STATUS_CALLBACK_URL is not ${PUBLIC_BASE_URL}/sms/status — ` +
-        'delivery updates sent there will fail the signature check. ' +
-        'Remove it to use PUBLIC_BASE_URL.'
+  if (c.publicBaseUrl && c.statusCallbackUrl && !c.statusCallbackUrl.startsWith(c.publicBaseUrl + '/sms/status')) {
+    notes.push(
+      `SMS_STATUS_CALLBACK_URL is not ${c.publicBaseUrl}/sms/status — ` +
+        'delivery updates sent there will fail the signature check. Remove it to use PUBLIC_BASE_URL.'
     );
   }
+  return notes;
 }
 
 // Why Twilio's webhooks cannot be checked, or null when they can.
 function webhookConfigProblem() {
+  const c = cfg();
   const missing = [];
-  if (!TWILIO_AUTH_TOKEN) missing.push('TWILIO_AUTH_TOKEN is not set');
-  if (!PUBLIC_BASE_URL) {
-    const raw = process.env.PUBLIC_BASE_URL || process.env.SMS_PUBLIC_BASE_URL;
+  if (!c.authToken) missing.push('TWILIO_AUTH_TOKEN is not set');
+  if (!c.publicBaseUrl) {
     missing.push(
-      raw
-        ? `the public base URL "${raw}" is not an http(s) URL`
+      c.rawPublicBaseUrl
+        ? `the public base URL "${c.rawPublicBaseUrl}" is not an http(s) URL`
         : 'PUBLIC_BASE_URL is not set'
     );
   }
@@ -274,15 +276,15 @@ function signatureValidFor(presented, reqUrl, form) {
   try {
     // The SDK also tries the URL with and without the default port, which
     // Twilio keeps for SMS and drops for HTTPS voice.
-    if (twilio.validateRequest(TWILIO_AUTH_TOKEN, presented, PUBLIC_BASE_URL + reqUrl, form)) {
+    if (twilio.validateRequest(cfg().authToken, presented, cfg().publicBaseUrl + reqUrl, form)) {
       return true;
     }
     // The SDK parses the URL, which adds a "/" to a bare host. A Voice URL
     // set to the tunnel address with no path is signed without it.
     if (reqUrl !== '/' && !reqUrl.startsWith('/?')) return false;
-    const bareUrl = PUBLIC_BASE_URL + reqUrl.slice(1);
+    const bareUrl = cfg().publicBaseUrl + reqUrl.slice(1);
     const expected = Buffer.from(
-      twilio.getExpectedTwilioSignature(TWILIO_AUTH_TOKEN, bareUrl, form)
+      twilio.getExpectedTwilioSignature(cfg().authToken, bareUrl, form)
     );
     const given = Buffer.from(presented);
     return given.length === expected.length && crypto.timingSafeEqual(given, expected);
@@ -307,7 +309,7 @@ function checkTwilioSignature(req, form) {
     return { status: 503, error: 'webhook signature check not configured', log: problem };
   }
   // Logged without the query string, which carries call details on GET.
-  const publicUrl = PUBLIC_BASE_URL + req.url.split('?')[0];
+  const publicUrl = cfg().publicBaseUrl + req.url.split('?')[0];
   const presented = req.headers['x-twilio-signature'];
   if (!presented) {
     return { status: 403, error: 'missing Twilio signature', log: `no X-Twilio-Signature (${publicUrl})` };
@@ -371,6 +373,10 @@ const server = http.createServer(async (req, res) => {
       return send(res, 405, { error: 'method not allowed' });
     }
     return send(res, 200, { ok: true, ...operatorNumbers() });
+  }
+
+  if (url.startsWith('/setup/')) {
+    return handleSetup(req, res, url);
   }
 
   if (url === '/token') {
@@ -451,6 +457,44 @@ async function handleTwilioWebhook(req, res, url) {
   return handleSmsStatus(params, res);
 }
 
+// In-app Twilio setup (server/setup.js). Private like every route not in
+// PUBLIC_ROUTES: checkPrivateAccess has already required the local API key,
+// so neither the Auth Token a request carries nor any answer reaches the
+// tunnel. No answer contains the Auth Token or an API secret.
+const SETUP_ACTIONS = {
+  '/setup/check': (body) => setup.check(body),
+  '/setup/review': (body) => setup.review(body),
+  '/setup/connect': (body) => setup.connect(body),
+  '/setup/repair': () => setup.repair(),
+};
+
+async function handleSetup(req, res, url) {
+  if (url === '/setup/status') {
+    if (req.method !== 'GET') return send(res, 405, { error: 'method not allowed' });
+    return send(res, 200, { ok: true, ...setup.status() });
+  }
+  const action = SETUP_ACTIONS[url];
+  if (!action) return send(res, 404, { error: 'not found' });
+  if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    return send(res, 400, { ok: false, error: err.message });
+  }
+  try {
+    const result = await action(body && typeof body === 'object' ? body : {});
+    return send(res, 200, result);
+  } catch (err) {
+    if (err instanceof SetupError) {
+      return send(res, err.status, { ok: false, kind: err.kind, error: err.message });
+    }
+    // Never echo a message that could quote a request: say only that it failed.
+    console.error(`[setup] ${url} failed:`, err.name || 'Error');
+    return send(res, 500, { ok: false, kind: 'error', error: 'Setup failed unexpectedly. Nothing further was changed.' });
+  }
+}
+
 async function handleToken(req, res) {
   let body;
   try {
@@ -470,18 +514,25 @@ async function handleToken(req, res) {
   }
 
   try {
+    const c = cfg();
+    if (missingSettings().length) {
+      return send(res, 409, {
+        error: 'Twilio is not connected yet. Open Settings → Twilio account in the app.',
+        notConfigured: true,
+      });
+    }
     const AccessToken = twilio.jwt.AccessToken;
     const { VoiceGrant } = AccessToken;
 
     const token = new AccessToken(
-      TWILIO_ACCOUNT_SID,
-      TWILIO_API_KEY,
-      TWILIO_API_SECRET,
+      c.accountSid,
+      c.apiKey,
+      c.apiSecret,
       { identity, ttl: 3600 }
     );
     token.addGrant(
       new VoiceGrant({
-        outgoingApplicationSid: TWILIO_TWIML_APP_SID,
+        outgoingApplicationSid: c.twimlAppSid,
         // Permit inbound calls to reach this Client identity. Without
         // this flag Twilio drops inbound connections to the Device even
         // if TwiML explicitly <Dial>s to the identity.
@@ -542,9 +593,9 @@ function renderTwiml(params, res) {
     // via the Client identity so the @twilio/voice-sdk Device receives it.
     // Use the caller's number as callerId so the softphone shows who's
     // calling; fall back to the configured caller ID if absent.
-    if (OPERATOR_IDENTITY) {
-      const dial = response.dial({ callerId: from || TWILIO_CALLER_ID });
-      dial.client(OPERATOR_IDENTITY);
+    if (cfg().identity) {
+      const dial = response.dial({ callerId: from || cfg().callerId });
+      dial.client(cfg().identity);
       return sendTwiml(res, response);
     }
     response.say(
@@ -563,7 +614,7 @@ function renderTwiml(params, res) {
     // Operator-to-Operator (Client) call. callerId is required for Client
     // originations, even when both legs are clients.
     const dial = response.dial({
-      callerId: TWILIO_CALLER_ID,
+      callerId: cfg().callerId,
       answerOnBridge: true,
     });
     dial.client(to);
@@ -571,7 +622,7 @@ function renderTwiml(params, res) {
     // PSTN call. Pass the configured caller ID; Twilio rejects the call
     // with 31005 if this is missing on a Client-originated call.
     const dial = response.dial({
-      callerId: TWILIO_CALLER_ID,
+      callerId: cfg().callerId,
       answerOnBridge: true,
     });
     dial.number(to);
@@ -673,6 +724,13 @@ async function handleSmsSend(req, res) {
     });
   }
 
+  if (missingSettings().length) {
+    return send(res, 409, {
+      error: 'Twilio is not connected yet. Open Settings → Twilio account in the app.',
+      status: 'failed',
+    });
+  }
+
   // Persist the outbound message locally *first* so the UI sees it even
   // if Twilio's API call fails. On Twilio success we update the local
   // record with the real SID + status; on failure we mark it failed.
@@ -686,7 +744,7 @@ async function handleSmsSend(req, res) {
   });
   const placeholderMsg = placeholder.messages[placeholder.messages.length - 1];
 
-  const from = TWILIO_SMS_FROM || TWILIO_CALLER_ID;
+  const from = cfg().smsFrom || cfg().callerId;
   if (!from) {
     const failed = await smsStore._withLock(() => {
       placeholderMsg.status = 'failed';
@@ -708,8 +766,8 @@ async function handleSmsSend(req, res) {
   }
 
   try {
-    const client = twilio(TWILIO_API_KEY, TWILIO_API_SECRET, {
-      accountSid: TWILIO_ACCOUNT_SID,
+    const client = twilio(cfg().apiKey, cfg().apiSecret, {
+      accountSid: cfg().accountSid,
     });
     const result = await client.messages.create(createParams);
     // Update the local record with the real SID and Twilio status.
@@ -821,8 +879,8 @@ async function handleSmsStatus(params, res) {
 }
 
 function operatorNumbers() {
-  const callerId = TWILIO_CALLER_ID || null;
-  const smsFrom = TWILIO_SMS_FROM || TWILIO_CALLER_ID || null;
+  const callerId = cfg().callerId || null;
+  const smsFrom = cfg().smsFrom || cfg().callerId || null;
   return { callerId, smsFrom };
 }
 
@@ -886,24 +944,36 @@ function startServer({ port = PORT, host = HOST } = {}) {
   });
 }
 
-module.exports = { renderTwiml, startServer, PUBLIC_ROUTES, operatorNumbers };
+// On every start, check and repair what Operator owns in the Twilio account
+// (see setup.repair). Only runs once the person has connected through the
+// in-app setup; a failure is recorded for the Connection view, not fatal.
+function startRepair() {
+  setup
+    .repair()
+    .then((r) => {
+      if (r.result === 'ok') {
+        console.log(`[setup] account check: ok${r.changes.length ? ' — ' + r.changes.join(' ') : ''}`);
+      } else if (r.result !== 'not-set-up' && r.result !== 'unavailable') {
+        console.warn(`[setup] account check: ${r.result} — ${r.error}`);
+      }
+    })
+    .catch((err) => console.warn('[setup] account check failed:', err.name || 'Error'));
+}
+
+module.exports = { renderTwiml, startServer, startRepair, PUBLIC_ROUTES, operatorNumbers };
 
 if (require.main === module) {
-  requireEnv();
   startServer().then(() => {
-    console.log(
-      `[token-server] listening on http://${HOST}:${PORT} ` +
-        `(account ${TWILIO_ACCOUNT_SID.slice(0, 6)}…)`
-    );
+    console.log(`[token-server] listening on http://${HOST}:${PORT}` + (cfg().accountSid ? ` (account ${cfg().accountSid.slice(0, 6)}…)` : ' (Twilio not connected yet)'));
     console.log(
       `[token-server] public (tunnel) routes: ${[...PUBLIC_ROUTES].join(' ')}` +
         ` · private routes need the local API key in ${keyFilePath()}`
     );
+    for (const note of startupNotes()) console.warn(`[token-server] ${note}`);
+    const sender = cfg().smsFrom || cfg().callerId;
     console.log(
       `[token-server] sms store: ${SMS_STORE_PATH}` +
-        (TWILIO_SMS_FROM || TWILIO_CALLER_ID
-          ? ` · sender: ${TWILIO_SMS_FROM || TWILIO_CALLER_ID}`
-          : ' · sender: NOT CONFIGURED (sms/send will 500)')
+        (sender ? ` · sender: ${sender}` : ' · sender: NOT CONFIGURED (sms/send will fail)')
     );
     const cb = getStatusCallbackUrl();
     if (cb) {
@@ -920,8 +990,9 @@ if (require.main === module) {
       webhookProblem
         ? `[token-server] twilio webhook signatures: NOT CONFIGURED (${webhookProblem}) — ` +
             'inbound calls, inbound SMS and delivery updates are refused; see server/README.md'
-        : `[token-server] twilio webhook signatures: required, checked against ${PUBLIC_BASE_URL}`
+        : `[token-server] twilio webhook signatures: required, checked against ${cfg().publicBaseUrl}`
     );
+    startRepair();
   }, (err) => {
     console.error(
       `[token-server] could not start on http://${HOST}:${PORT}: ${err.message}`

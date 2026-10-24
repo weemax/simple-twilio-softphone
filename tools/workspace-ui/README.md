@@ -90,3 +90,22 @@ node tools/workspace-ui/demo.cjs http://127.0.0.1:8089
 Viewer pauses are intentional, not retries or timing-based test assertions. Convert
 the resulting WebM to silent H.264/yuv420p with fast-start when preparing a demo.
 Keep the evidence outside the project and stop the fixture after verification.
+
+## Twilio setup against a fictional Twilio
+
+`tools/fake-twilio` is an in-memory Twilio account on 127.0.0.1 (numbers, API keys,
+TwiML Apps, Messaging Services, failure injection, a request log with credentials
+removed). `src/setup.test.js` and `src/serverSetupRoutes.test.js` use it directly. For
+the actual Electron journey, with the renderer fixture from above still running:
+
+```sh
+node tools/workspace-ui/desktop-setup-journey.cjs
+```
+
+It starts the fake Twilio in its own process, launches the isolated Electron profile in
+`OPERATOR_DESKTOP_SETUP=fresh` mode (no Twilio settings at all, so the app opens on
+Settings → Twilio account) and drives Account → Number → Review → Connected through the
+real preload, IPC, setup broker, private service and `server/.env`. It then checks what
+the fake account received, that connecting twice writes nothing, that a restart repairs a
+deleted application, and that nothing secret reached the page. No real provider, public
+tunnel or Keychain is involved.

@@ -91,8 +91,18 @@ each part actually answers, not for a fixed time, then prints a summary:
   including their helper processes, and nothing else. `npm run phone -- --stop` does
   the same from another terminal, or stops what an earlier run left behind.
 
-Settings → Connection shows the local service, the public tunnel, voice registration,
-message updates, the SMS sender and the Twilio account separately.
+Settings → Connection shows the local service, the public tunnel, the Twilio account,
+voice registration, incoming calls, incoming texts, the delivery callback, message
+updates, the SMS sender and photo (MMS) capability separately.
+
+### Connecting Twilio
+
+An unconnected first launch opens **Settings → Twilio account** (Account → Number →
+Review → Connected). Enter your Account SID and Auth Token (or reuse the ones already in
+`server/.env`), choose one existing number, review every change, and Connect. Operator
+creates its own API key and TwiML App and points only that number at them; a route that
+goes to another application is shown and replaced only if you tick Replace for it.
+Operator never buys a number. See [`server/README.md`](server/README.md#in-app-setup).
 
 ### Starting the parts separately
 
@@ -177,9 +187,8 @@ ELECTRON_IS_DEV=0 npm start
 ```
 ┌────────────────────────────────────────────────────┐
 │ Electron main process (main.js)                    │
-│  - IPC handlers: config, secrets, token,           │
-│    notification, sms                               │
-│  - safeStorage-backed secret store (Keychain)      │
+│  - IPC handlers: config, token, notification, sms, │
+│    session, setup (no secret read-back)            │
 │  - Token broker + SMS broker (HTTP to local server)│
 └─────────────────┬──────────────────────────────────┘
                   │ IPC (allowlisted channels)

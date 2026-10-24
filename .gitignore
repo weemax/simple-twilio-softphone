@@ -63,6 +63,11 @@ server/sms-store.json
 server/sms-store.json.corrupt-*
 server/sms-store.json.tmp
 
+# What the in-app Twilio setup last verified (numbers, routes; no secrets)
+server/.operator-setup.json
+server/.operator-setup.json.tmp
+server/.env.tmp
+
 # Per-start local API key for the token server's private routes
 server/.local-api-key
 server/.local-api-key.tmp

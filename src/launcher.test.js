@@ -301,26 +301,33 @@ describe('npm run phone', () => {
     expect(runLock.readLock(options.runDir)).toBeNull();
   });
 
-  test('missing settings and installs are named with their fix, and nothing starts', async () => {
+  test('missing packages are named with their fix, and nothing starts', async () => {
+    const notInstalled = await setup();
+    const run = launch({ ...notInstalled.options, checkInstalls: true, projectDir: tempDir() });
+    expect(await run.done).toBe(1);
+    expect(run.out.text).toContain('Fix: npm install\n');
+    expect(run.out.text).toContain('Fix: npm install --prefix server');
+    expect(run.spawned).toEqual([]);
+  });
+
+  // TWP-9 piece 2: a first launch has no Twilio settings yet; the in-app
+  // setup fills them in, so the launcher no longer refuses to start.
+  test('missing Twilio settings start the launch with a note pointing at the in-app setup', async () => {
     const withoutSecret = { ...SETTINGS, TWILIO_API_SECRET: '' };
     const missingSetting = await setup({ settings: withoutSecret });
     const run = launch(missingSetting.options);
-    expect(await run.done).toBe(1);
-    expect(run.out.text).toContain('server/.env is missing TWILIO_API_SECRET.');
-    expect(run.spawned).toEqual([]);
+    await run.ready;
+    expect(run.out.text).toContain('Twilio is not connected yet (server/.env is missing TWILIO_API_SECRET)');
+    expect(run.out.text).toContain('Settings → Twilio account');
+    run.stop();
+    expect(await run.done).toBe(0);
 
     const noFile = await setup({ writeEnvFile: false, settings: { ...SETTINGS, TWILIO_ACCOUNT_SID: '' } });
     const run2 = launch(noFile.options);
-    expect(await run2.done).toBe(1);
-    expect(run2.out.text).toContain('server/.env does not exist.');
-    expect(run2.out.text).toContain('Copy server/.env.example to server/.env');
-
-    const notInstalled = await setup();
-    const run3 = launch({ ...notInstalled.options, checkInstalls: true, projectDir: tempDir() });
-    expect(await run3.done).toBe(1);
-    expect(run3.out.text).toContain('Fix: npm install\n');
-    expect(run3.out.text).toContain('Fix: npm install --prefix server');
-    expect(run3.spawned).toEqual([]);
+    await run2.ready;
+    expect(run2.out.text).toContain('Twilio is not connected yet (server/.env does not exist)');
+    run2.stop();
+    expect(await run2.done).toBe(0);
   });
 
   test('a lock left by a run that ended unexpectedly is cleared when nothing of it remains', async () => {

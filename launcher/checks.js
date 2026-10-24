@@ -8,7 +8,9 @@ const https = require('https');
 const net = require('net');
 const path = require('path');
 
-// The settings server/server.js refuses to start without (its requireEnv).
+// The settings the service needs to sign tokens and send texts. Without them
+// it still starts, and the app opens on Settings → Twilio account, whose
+// reviewed setup writes them to server/.env.
 const REQUIRED_SETTINGS = [
   'TWILIO_ACCOUNT_SID',
   'TWILIO_API_KEY',
@@ -78,7 +80,8 @@ function parseEnvFile(text) {
 // The service's settings as server/server.js will see them: server/.env,
 // with anything already in the environment taking precedence (dotenv never
 // overrides). Returns the problems that stop a launch and the notes worth
-// reading before calling anyone.
+// reading before calling anyone. Missing Twilio settings are a note, not a
+// problem: the in-app setup is how a first launch gets them.
 function readServiceSettings(envFile, env) {
   let fileValues = {};
   let fileExists = false;
@@ -91,27 +94,24 @@ function readServiceSettings(envFile, env) {
   const value = (k) => (env[k] !== undefined && env[k] !== '' ? env[k] : fileValues[k]) || '';
   const missing = REQUIRED_SETTINGS.filter((k) => !value(k));
   const problems = [];
-  if (missing.length) {
-    problems.push({
-      what: fileExists
-        ? `server/.env is missing ${missing.join(', ')}.`
-        : 'server/.env does not exist.',
-      fix: fileExists
-        ? 'Add them from console.twilio.com (see server/README.md), then run npm run phone again.'
-        : 'Copy server/.env.example to server/.env and fill in your Twilio values (see server/README.md).',
-    });
-  }
   const notes = [];
-  if (!value('TWILIO_AUTH_TOKEN')) {
+  if (missing.length) {
     notes.push(
-      'TWILIO_AUTH_TOKEN is not set in server/.env, so the service refuses incoming calls, incoming texts and delivery updates.'
+      `Twilio is not connected yet (${fileExists ? `server/.env is missing ${missing.join(', ')}` : 'server/.env does not exist'}). ` +
+        'The app opens on Settings → Twilio account to connect it; calls and texts need that first.'
     );
-  }
-  if (!value('TWILIO_CALLER_ID')) {
-    notes.push('TWILIO_CALLER_ID is not set in server/.env, so outgoing calls fail.');
-  }
-  if (!value('OPERATOR_IDENTITY')) {
-    notes.push('OPERATOR_IDENTITY is not set in server/.env, so incoming calls cannot ring this app.');
+  } else {
+    if (!value('TWILIO_AUTH_TOKEN')) {
+      notes.push(
+        'TWILIO_AUTH_TOKEN is not set in server/.env, so the service refuses incoming calls, incoming texts and delivery updates.'
+      );
+    }
+    if (!value('TWILIO_CALLER_ID')) {
+      notes.push('TWILIO_CALLER_ID is not set in server/.env, so outgoing calls fail.');
+    }
+    if (!value('OPERATOR_IDENTITY')) {
+      notes.push('OPERATOR_IDENTITY is not set in server/.env, so incoming calls cannot ring this app.');
+    }
   }
   const port = parseInt(fileValues.PORT || '', 10);
   return {
