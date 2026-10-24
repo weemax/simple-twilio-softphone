@@ -56,6 +56,7 @@ test('every part of the connection has its own row', () => {
     'Incoming calls': 'Not checked yet. Open Twilio account and choose Check connection now.',
     'Incoming texts': 'Not checked yet. Open Twilio account and choose Check connection now.',
     'Delivery callback': 'No public address: delivery updates for texts you send will not arrive.',
+    'Voice URL': 'Not set yet. Open Twilio account and connect to create Operator’s TwiML App.',
     'Message updates': 'Connected to the local service',
     'SMS sender': '+1 555 555 0100',
     'Photo (MMS) sender': 'Not checked yet.',
@@ -95,6 +96,25 @@ test.each([
 ])('an account that is %s is described as that, and as a problem', (state, text) => {
   const setup = { ...SETUP, connection: { ...SETUP.connection, account: { state, detail: null } } };
   expect(rows(render(<ConnectionPanel status={null} voice={voice} sms={sms} setup={setup} />))['Twilio account']).toMatch(text);
+});
+
+// TWP-23: the Voice URL on Operator's own TwiML App, from the last check or
+// Connect, says whether it is this session's address. Blank until Connect.
+test('the Voice URL on Operator’s TwiML App says whether it matches this session’s address', () => {
+  const tunnelUrl = 'https://fictional-dev-domain.ngrok-free.app';
+  const status = { ok: true, managed: true, service: { state: 'ready', url: SERVICE }, tunnel: { state: 'ready', url: tunnelUrl, reason: null } };
+  const voiceRow = (voiceUrl, shown = status) =>
+    rows(render(<ConnectionPanel status={shown} voice={voice} sms={sms} setup={{ ok: true, credentials: true, connection: { account: { state: 'ok' }, voiceUrl } }} />))['Voice URL'];
+
+  expect(voiceRow(null)).toBe('Not set yet. Open Twilio account and connect to create Operator’s TwiML App.');
+  expect(voiceRow(`${tunnelUrl}/twiml`)).toBe(`${tunnelUrl}/twiml matches this session’s address.`);
+  expect(voiceRow('https://fictional-old-domain.ngrok-free.app/twiml')).toBe(
+    `https://fictional-old-domain.ngrok-free.app/twiml does not match this session’s address (${tunnelUrl}/twiml). Operator corrects it when npm run phone starts.`
+  );
+  const noTunnel = { ...status, tunnel: { state: 'unavailable', url: null, reason: EXPLANATIONS.ERR_NGROK_320 } };
+  expect(voiceRow(`${tunnelUrl}/twiml`, noTunnel)).toBe(
+    `${tunnelUrl}/twiml. No tunnel address this session to compare it with.`
+  );
 });
 
 test('credentials that were never entered read as not connected', () => {

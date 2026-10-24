@@ -53,8 +53,19 @@ cp server/.env.example server/.env
 ```
 
 Install [ngrok](https://ngrok.com/download) and sign in once with
-`ngrok config add-authtoken <your authtoken>`. ngrok assigns your account's dev
-domain automatically; you never type it.
+`ngrok config add-authtoken <your authtoken>`. ngrok gives each launch a new random
+address unless you fix one. Your free account has one dev domain (Gateway → Domains
+in the ngrok dashboard, such as `https://abc123xyz.ngrok-free.dev`). Put it in
+`server/.env` once, so the address never changes:
+
+```env
+NGROK_URL=https://abc123xyz.ngrok-free.dev
+```
+
+`npm run phone -- --ngrok-url https://abc123xyz.ngrok-free.dev` does the same for one run.
+Operator then starts ngrok on that address and refuses to start if `PUBLIC_BASE_URL` in
+`server/.env` names a different one. Without `NGROK_URL`, Operator updates its own TwiML
+App to each launch's address once you have connected (see Connecting Twilio).
 
 Each session:
 
@@ -79,6 +90,8 @@ each part actually answers, not for a fixed time, then prints a summary:
   signatures and delivery updates, so `PUBLIC_BASE_URL` in `server/.env` is not needed.
   The URLs in the Twilio console must use that address (see below); the reviewed
   in-app Twilio setup piece will update them for you.
+- With a fixed address, ngrok refuses an address that is not on your account (ERR_NGROK_320),
+  and Operator never falls back to a random one: the app opens without a tunnel and says why.
 - If ngrok is missing, not signed in or already running elsewhere, the app still
   opens: contacts, message history and sending texts work, and the app says why the
   tunnel is unavailable and that calls, incoming texts and delivery updates need it.
@@ -93,8 +106,9 @@ each part actually answers, not for a fixed time, then prints a summary:
   the same from another terminal, or stops what an earlier run left behind.
 
 Settings → Connection shows the local service, the public tunnel, the Twilio account,
-voice registration, incoming calls, incoming texts, the delivery callback, message
-updates, the SMS sender and photo (MMS) capability separately.
+voice registration, incoming calls, incoming texts, the delivery callback, the Voice URL on
+Operator's TwiML App (and whether it matches this session's address), message updates,
+the SMS sender and photo (MMS) capability separately.
 
 ### Connecting Twilio
 

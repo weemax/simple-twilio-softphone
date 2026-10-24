@@ -4,8 +4,9 @@
 // the local status address of *this* ngrok (4040, or the next free port when
 // another ngrok already holds 4040), and the tunnel's public address is read
 // from that status: /api/endpoints, or the older /api/tunnels that ngrok
-// documents as deprecated. Nobody types a domain: every ngrok account's dev
-// domain is chosen automatically when no --url is given.
+// documents as deprecated. With no fixed address, ngrok assigns a random one.
+// With one (NGROK_URL in server/.env, or --ngrok-url), it is passed as --url,
+// and a different address from ngrok is never used.
 
 const fs = require('fs');
 const path = require('path');
@@ -22,6 +23,10 @@ const EXPLANATIONS = {
     'ngrok rejected its saved sign-in. Copy your authtoken again from https://dashboard.ngrok.com/get-started/your-authtoken, then run: ngrok config add-authtoken <your authtoken>',
   ERR_NGROK_108:
     'Your ngrok account already has as many ngrok agents running as its plan allows. npm run phone did not start them and leaves them running. Stop one (for example, an ngrok in another terminal), then run npm run phone again.',
+  ERR_NGROK_319:
+    'The fixed ngrok address (NGROK_URL in server/.env, or --ngrok-url) is not on this ngrok account. Copy your dev domain from https://dashboard.ngrok.com/domains (Gateway → Domains), set it as NGROK_URL, then run npm run phone again.',
+  ERR_NGROK_320:
+    'The fixed ngrok address (NGROK_URL in server/.env, or --ngrok-url) is reserved for another ngrok account. Copy your own dev domain from https://dashboard.ngrok.com/domains (Gateway → Domains), set it as NGROK_URL, then run npm run phone again.',
   ERR_NGROK_334:
     'Your ngrok address is already online from another ngrok (for example, one started by hand in another terminal). npm run phone did not start it and leaves it running. Stop it, then run npm run phone again.',
 };
@@ -106,7 +111,8 @@ async function readAssignedAddress(apiAddr, port) {
 
 // Starts ngrok for `port`. Resolves { process, url } once its local status
 // shows the assigned address; rejects with a TunnelError that explains why
-// not. A failed ngrok is stopped before rejecting.
+// not. A failed ngrok is stopped before rejecting. With `fixedUrl`, ngrok must
+// report exactly that address.
 async function startTunnel({
   executable,
   port,
@@ -114,16 +120,20 @@ async function startTunnel({
   env,
   timeoutMs,
   onLog,
+  fixedUrl = null,
   onSpawned = () => {},
   shouldStop = () => false,
 }) {
   let apiAddr = null;
   let logUrl = null;
   let fatal = null;
+  const args = ['http', `127.0.0.1:${port}`];
+  if (fixedUrl) args.push('--url', fixedUrl);
+  args.push('--log', 'stdout', '--log-format', 'json');
   const proc = new OwnedProcess({
     name: 'ngrok',
     command: executable,
-    args: ['http', `127.0.0.1:${port}`, '--log', 'stdout', '--log-format', 'json'],
+    args,
     cwd,
     env,
     onLine(line) {
@@ -185,7 +195,15 @@ async function startTunnel({
     }
     throw new TunnelError(result.reason, fatal && fatal.code);
   }
-  return { process: proc, url: result.value.replace(/\/+$/, ''), statusAddr: apiAddr };
+  const url = result.value.replace(/\/+$/, '');
+  if (fixedUrl && url !== fixedUrl) {
+    await proc.stop(3000);
+    throw new TunnelError(
+      `ngrok opened ${url} instead of the fixed address ${fixedUrl}, so it was stopped and no other address is used. ` +
+        'Check NGROK_URL in server/.env and the dev domain on your ngrok account, then run npm run phone again.'
+    );
+  }
+  return { process: proc, url, statusAddr: apiAddr };
 }
 
 module.exports = {

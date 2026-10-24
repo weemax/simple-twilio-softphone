@@ -62,8 +62,10 @@ service, the React dev server, ngrok and Electron, and supervises them:
   Electron prints `[operator] window ready` (main.js, on `did-finish-load`). Each wait
   has a deadline; none is a fixed sleep.
 - **Tunnel problems never stop the launch.** ngrok missing, not signed in
-  (`ERR_NGROK_4018`), rejected sign-in (105/107), account agent limit (108) or address
-  already online (334) are explained, and the app opens without a tunnel. A tunnel that
+  (`ERR_NGROK_4018`), rejected sign-in (105/107), account agent limit (108), address
+  already online (334), or a fixed address not on the account (319/320) are explained, and
+  the app opens without a tunnel. A fixed address that ngrok does not open exactly is never
+  replaced by a random one. A tunnel that
   drops later is reported as stopped.
 - **Explanations before anything starts.** Missing packages, missing required
   `server/.env` settings, an occupied service or React port (with the occupant named
@@ -196,9 +198,14 @@ Twilio's webhook servers need a public HTTPS URL pointing at your local `/twiml`
 
 `npm run phone` starts ngrok itself (`ngrok http 127.0.0.1:5050`), reads the address
 it assigned and passes it to the token server, so step 1 below is not needed then.
-ngrok assigns every account's dev domain automatically; nobody types it. Steps 2–4
-(the Twilio console URLs) are now done by Settings → Twilio account for Operator's own
-application and the chosen number.
+Without a fixed address ngrok picks a new random one each launch. To keep one address,
+set your account's dev domain once in `server/.env` (Gateway → Domains in the ngrok
+dashboard), `NGROK_URL=https://abc123xyz.ngrok-free.dev`, or pass `-- --ngrok-url <address>`
+for one run. ngrok is then started with `--url` on that address, the token server gets it
+as `PUBLIC_BASE_URL`, and the launch stops, naming both, if `server/.env` names another
+`PUBLIC_BASE_URL`. ngrok never falls back to a random address then. Steps 2–4 (the Twilio
+console URLs) are done by Settings → Twilio account for Operator's own application and the
+chosen number.
 
 Started by hand instead:
 
@@ -679,9 +686,10 @@ node --check server.js        # Syntax check
 | `server/.env` | `SMS_STORE_PATH` | **Optional.** Override the conversation-store JSON path. Default `<server dir>/sms-store.json`. |
 | `server/.env` | `TWILIO_AUTH_TOKEN` | **Required for Twilio's webhooks (added 2026-10-24).** The account's primary Auth Token. Used only to check `X-Twilio-Signature` on `/twiml`, `/sms/inbound` and `/sms/status`; without it every webhook gets 503. See §3. |
 | `server/.env` | `PUBLIC_BASE_URL` | **Required for Twilio's webhooks (added 2026-10-24).** The tunnel's public address with no path (e.g. `https://YOUR-DOMAIN.ngrok-free.app`). Signatures are checked against it plus each request's path and query; the SMS status callback defaults to `<base>/sms/status`. See §3 and §3c. |
+| `server/.env` | `NGROK_URL` | **Optional.** Your ngrok dev domain as an https address with no path (e.g. `https://abc123xyz.ngrok-free.dev`). `npm run phone` starts ngrok on it with `--url`, and refuses to start if `PUBLIC_BASE_URL` names another address. `npm run phone -- --ngrok-url <address>` sets it for one run. Unset, ngrok picks a random address each launch. |
 | `server/.env` | `SMS_STATUS_CALLBACK_URL` | **Optional.** Overrides the status callback URL; it must still be `PUBLIC_BASE_URL/sms/status` or delivery updates fail the signature check. See §3c. |
 | `server/.env` | `SMS_PUBLIC_BASE_URL` | **Optional.** Older name for `PUBLIC_BASE_URL`, still read when `PUBLIC_BASE_URL` is unset. |
-| server (set by `npm run phone`) | `OPERATOR_LAUNCH_ID` | Random per-launch id echoed by `/health`; also sets `PUBLIC_BASE_URL` and `SMS_STATUS_CALLBACK_URL` to ngrok's assigned address. |
+| server (set by `npm run phone`) | `OPERATOR_LAUNCH_ID` | Random per-launch id echoed by `/health`; also sets `PUBLIC_BASE_URL` and `SMS_STATUS_CALLBACK_URL` to the tunnel's address (the fixed `NGROK_URL`, or ngrok's assigned one). |
 | main process (set by `npm run phone`) | `OPERATOR_SESSION_FILE` | The launcher's `.operator-phone/session.json`, read by `session:status`. Unset means the tunnel is reported as not checked. |
 | main process (set by `npm run phone`) | `OPERATOR_RENDERER_URL` | Dev renderer address; only `http://localhost` or `http://127.0.0.1` is accepted. |
 | main process | `TOKEN_BACKEND_URL` | override default `http://127.0.0.1:5050/token` |

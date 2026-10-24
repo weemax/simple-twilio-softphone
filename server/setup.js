@@ -752,6 +752,7 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
           voice: routes.voice,
           sms: routes.sms,
           callback: { state: 'ready', url: pub.url + STATUS_PATH },
+          voiceUrl: app.voiceUrl || null,
         },
       });
       done('settings', 'done', 'Saved the account, number and identity to server/.env.');
@@ -808,6 +809,7 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
         app = found.app;
         connection.callback = { state: 'no-public-address', url: null };
       }
+      connection.voiceUrl = app ? app.voiceUrl || null : null;
       let number = null;
       try {
         number = await api.getNumber(state.number.sid);
@@ -884,6 +886,7 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
         account: connection.account || { state: 'unchecked', detail: null },
         voice: connection.voice || null,
         sms: connection.sms || null,
+        voiceUrl: connection.voiceUrl || null,
         callback:
           connection.callback ||
           (cfg.publicBaseUrl

@@ -7,9 +7,12 @@
 // names are ones the installed ngrok 3 binary contains; the error codes are
 // the ones ngrok's error pages document.
 //
-// FAKE_NGROK_MODE: ok (default) | signin | session-limit | silent
+// FAKE_NGROK_MODE: ok (default) | signin | session-limit | not-on-account |
+//   other-address (reports a random address whatever --url says) | silent
 // FAKE_NGROK_API: tunnels-only answers only the older /api/tunnels
 // FAKE_NGROK_RECORD: file to write { pid, args } to
+// With --url, the address it reports is that fixed address, as ngrok does for
+// a dev domain on the account; no traffic reaches the fixed address itself.
 // SIGUSR2 makes it exit as if the agent stopped on its own.
 
 const fs = require('fs');
@@ -17,6 +20,8 @@ const http = require('http');
 
 const args = process.argv.slice(2);
 const mode = process.env.FAKE_NGROK_MODE || 'ok';
+const urlAt = args.indexOf('--url');
+const fixedUrl = urlAt === -1 ? null : args[urlAt + 1];
 if (process.env.FAKE_NGROK_RECORD) {
   fs.writeFileSync(process.env.FAKE_NGROK_RECORD, JSON.stringify({ pid: process.pid, args }));
 }
@@ -39,6 +44,13 @@ if (mode === 'session-limit') {
     'You can run multiple simultaneous tunnels from a single agent session by defining the tunnels in your agent configuration file and starting them with the command `ngrok start --all`.\r\n\r\nERR_NGROK_108\r\n';
   log({ lvl: 'eror', msg: 'session closing', obj: 'tunnels.session', err });
   process.stderr.write('ERROR:  Your account is limited to 1 simultaneous ngrok agent sessions.\nERROR:  ERR_NGROK_108\n');
+  process.exit(1);
+}
+if (mode === 'not-on-account') {
+  const err =
+    `This domain is reserved for another account.\nFailed to create an endpoint with the domain ${fixedUrl}.\r\n\r\nERR_NGROK_320\r\n`;
+  log({ lvl: 'eror', msg: 'session closing', obj: 'tunnels.session', err });
+  process.stderr.write('ERROR:  This domain is reserved for another account.\nERROR:  ERR_NGROK_320\n');
   process.exit(1);
 }
 
@@ -83,7 +95,8 @@ if (mode === 'silent') {
     req.pipe(up);
   });
   proxy.listen(0, '127.0.0.1', () => {
-    const publicUrl = `http://127.0.0.1:${proxy.address().port}`;
+    const publicUrl =
+      fixedUrl && mode !== 'other-address' ? fixedUrl : `http://127.0.0.1:${proxy.address().port}`;
     const upstream = `http://${targetHost}:${targetPort}`;
     const status = {
       '/api/endpoints': {

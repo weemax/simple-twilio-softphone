@@ -505,6 +505,24 @@ describe('repair on launch', () => {
     expect(chosen.voice_application_sid).toBe(operatorApps()[0].sid);
   });
 
+  // TWP-23: the Connection view shows the Voice URL Operator's own application
+  // has, from the reads and writes setup already makes.
+  test('the Voice URL on Operator’s application is blank until Connect, then follows the address on each repair', async () => {
+    const { reopen } = await connected();
+    expect(makeSetup().setup.status().connection.voiceUrl).toBeNull();
+    expect(reopen().status().connection.voiceUrl).toBe(`${PUBLIC}/twiml`);
+    await reopen({ PUBLIC_BASE_URL: NEXT_PUBLIC }).repair();
+    expect(reopen({ PUBLIC_BASE_URL: NEXT_PUBLIC }).status().connection.voiceUrl).toBe(`${NEXT_PUBLIC}/twiml`);
+  });
+
+  // TWP-23: a fixed address that does not change means a launch writes nothing to Twilio.
+  test('a launch on the same address changes nothing in Twilio', async () => {
+    const { reopen } = await connected();
+    fake.clearRequests();
+    expect(await reopen({ PUBLIC_BASE_URL: PUBLIC }).repair()).toMatchObject({ ok: true, result: 'ok', changes: [] });
+    expect(fake.writes()).toEqual([]);
+  });
+
   test('a deleted application is recreated and the number’s routes follow it', async () => {
     const { reopen, chosen, env } = await connected();
     const dead = operatorApps()[0].sid;
