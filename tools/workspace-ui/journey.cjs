@@ -34,8 +34,11 @@ let browser;
       .getByRole('navigation', { name: 'Main navigation' })
       .getByRole('button')
       .filter({ hasText: new RegExp('^' + name) });
-  const shot = async (name) =>
-    page.screenshot({ path: `${evidence}/${name}.png` });
+  const shot = async (name) => {
+    // Wait for the resized viewport to paint; never publish an intermediate compositor frame.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await page.screenshot({ path: `${evidence}/${name}.png` });
+  };
   const workspace = () =>
     page.evaluate(
       () => JSON.parse(localStorage.getItem('fixture-config')).workspace,

@@ -629,6 +629,7 @@ it('does not mark unseen inbound messages read when the selected history fails t
     await act(async()=>handlers.setConversations([{number,messages:[{sid:'SMunread',body:'Please confirm the address.',at:1781856000000,direction:'inbound',status:'received'}],messageCount:1}]));
     await flush();
     expect(container.querySelector('.sms-thread').textContent).toContain('History is unavailable');
+    expect(container.querySelector('.sms-thread').textContent).not.toContain('No messages yet');
     const writes=set.mock.calls.filter(([key])=>key==='workspace');
     expect(writes.length).toBeGreaterThan(0);
     writes.forEach(([,value])=>expect(value.readIds[number]).toEqual([]));

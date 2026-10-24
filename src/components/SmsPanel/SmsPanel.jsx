@@ -115,7 +115,7 @@ function ThreadView({
           {error}
         </p>
       )}
-      {!loading && !thread?.messages?.length && (
+      {!error && !loading && !thread?.messages?.length && (
         <p className="muted small">
           No messages yet. Type below to start the conversation.
         </p>
