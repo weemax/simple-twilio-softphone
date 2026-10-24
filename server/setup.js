@@ -420,6 +420,25 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
     return app ? { app, from: 'search' } : { app: null };
   }
 
+  function recordAppObservation(app, voiceUrlVerified, warnings) {
+    const sidShadowed = config.shadowed(['TWILIO_TWIML_APP_SID']).length > 0;
+    if (config.get().twimlAppSid !== app.sid && !sidShadowed) {
+      writeEnv({ TWILIO_TWIML_APP_SID: app.sid }, warnings);
+    }
+    const state = readState();
+    const history = new Set([...(state.appSidHistory || []), app.sid]);
+    writeState({
+      appSid: app.sid,
+      appSidHistory: [...history],
+      connection: {
+        ...(state.connection || {}),
+        voiceUrl: app.voiceUrl || null,
+        voiceUrlVerified,
+        voiceUrlCheckedAt: now(),
+      },
+    });
+  }
+
   async function ensureApp(creds, installId, pub, warnings) {
     const api = apiWith(creds);
     const want = desiredAppFields(installId, pub);
@@ -442,11 +461,27 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
         detail = `The TwiML App ${app.sid} already points at this address.`;
       }
     }
-    const state = readState();
-    const history = new Set([...(state.appSidHistory || []), app.sid]);
-    writeState({ appSid: app.sid, appSidHistory: [...history] });
-    if (config.get().twimlAppSid !== app.sid) {
-      writeEnv({ TWILIO_TWIML_APP_SID: app.sid }, warnings);
+
+    // A successful write response is not enough: read the owned resource back,
+    // then durably record what Twilio actually reports before Connect can claim
+    // success. If that read fails, the last write response remains explicitly
+    // unverified and Retry can find the same app by its installation name.
+    recordAppObservation(app, false, warnings);
+    app = await api.getApp(app.sid);
+    const voiceUrlVerified = app.voiceUrl === want.VoiceUrl;
+    const appSidActive = config.get().twimlAppSid === app.sid;
+    recordAppObservation(app, voiceUrlVerified && appSidActive, warnings);
+    if (!appSidActive) {
+      throw new SetupError(
+        'TWILIO_TWIML_APP_SID is set in the environment and prevents Operator from using its installation-owned app. Remove that override, then Retry.',
+        { status: 409, kind: 'shadowed' }
+      );
+    }
+    if (!voiceUrlVerified) {
+      throw new SetupError(
+        `Twilio did not confirm the expected Voice URL. It reports ${app.voiceUrl || 'no Voice URL'}; Retry to check and repair it.`,
+        { status: 502, kind: 'app-unverified' }
+      );
     }
     return { app, action, detail };
   }
@@ -753,6 +788,8 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
           sms: routes.sms,
           callback: { state: 'ready', url: pub.url + STATUS_PATH },
           voiceUrl: app.voiceUrl || null,
+          voiceUrlVerified: true,
+          voiceUrlCheckedAt: now(),
         },
       });
       done('settings', 'done', 'Saved the account, number and identity to server/.env.');
@@ -793,7 +830,8 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
     const api = apiWith(creds);
     const warnings = [];
     const changes = [];
-    const connection = { ...(state.connection || {}) };
+    let connection = { ...(state.connection || {}) };
+    let voiceUrlVerifiedThisRun = false;
     try {
       const k = await ensureKey(creds, cfg.installId, warnings);
       if (k.action !== 'unchanged') changes.push(k.detail);
@@ -802,12 +840,17 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
       if (pub) {
         const a = await ensureApp(creds, cfg.installId, pub, warnings);
         app = a.app;
+        voiceUrlVerifiedThisRun = true;
         if (a.action !== 'unchanged') changes.push(a.detail);
         connection.callback = { state: 'ready', url: pub + STATUS_PATH };
+        connection.voiceUrlVerified = true;
+        connection.voiceUrlCheckedAt = now();
       } else {
         const found = await findOwnedApp(api, cfg.installId);
         app = found.app;
         connection.callback = { state: 'no-public-address', url: null };
+        connection.voiceUrlVerified = null;
+        connection.voiceUrlCheckedAt = app ? now() : null;
       }
       connection.voiceUrl = app ? app.voiceUrl || null : null;
       let number = null;
@@ -841,6 +884,13 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
       writeState({ connection });
       return { ok: true, result: 'ok', changes, warnings };
     } catch (err) {
+      const lastState = readState().connection || {};
+      connection = { ...connection };
+      if (Object.prototype.hasOwnProperty.call(lastState, 'voiceUrl')) connection.voiceUrl = lastState.voiceUrl;
+      if (Object.prototype.hasOwnProperty.call(lastState, 'voiceUrlCheckedAt')) {
+        connection.voiceUrlCheckedAt = lastState.voiceUrlCheckedAt;
+      }
+      connection.voiceUrlVerified = voiceUrlVerifiedThisRun ? connection.voiceUrlVerified : false;
       const kind = err instanceof TwilioError || err instanceof SetupError ? err.kind : 'error';
       const result = kind === 'invalid-credentials' ? 'invalid-credentials' : kind === 'unreachable' ? 'unreachable' : 'error';
       connection.checkedAt = now();
@@ -887,6 +937,8 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
         voice: connection.voice || null,
         sms: connection.sms || null,
         voiceUrl: connection.voiceUrl || null,
+        voiceUrlVerified: connection.voiceUrlVerified === undefined ? null : connection.voiceUrlVerified,
+        voiceUrlCheckedAt: connection.voiceUrlCheckedAt || null,
         callback:
           connection.callback ||
           (cfg.publicBaseUrl

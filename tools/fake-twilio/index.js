@@ -29,6 +29,8 @@ function startFakeTwilio({ accountSid = ACCOUNT_SID, authToken = AUTH_TOKEN } = 
   const requests = [];
   let unreachable = false;
   const failures = [];
+  const droppedResponses = [];
+  let ignoredVoiceUrlUpdates = 0;
 
   function addNumber(fields = {}) {
     const n = {
@@ -139,6 +141,18 @@ function startFakeTwilio({ accountSid = ACCOUNT_SID, authToken = AUTH_TOKEN } = 
       if (!entry.auth) {
         return send(res, 401, { code: 20003, message: 'Authenticate', status: 401 });
       }
+      const droppedResponse = droppedResponses.findIndex((d) => d.method === req.method && d.pattern.test(url.pathname));
+      if (droppedResponse >= 0) {
+        droppedResponses.splice(droppedResponse, 1);
+        return route(req.method, url, form, {
+          writeHead() {
+            return this;
+          },
+          end() {
+            req.socket.destroy();
+          },
+        }, entry.auth);
+      }
       route(req.method, url, form, res, entry.auth);
     });
   });
@@ -197,7 +211,8 @@ function startFakeTwilio({ accountSid = ACCOUNT_SID, authToken = AUTH_TOKEN } = 
       if (method === 'GET') return send(res, 200, a);
       if (method === 'POST') {
         if ('FriendlyName' in form) a.friendly_name = form.FriendlyName;
-        if ('VoiceUrl' in form) a.voice_url = form.VoiceUrl;
+        if ('VoiceUrl' in form && ignoredVoiceUrlUpdates === 0) a.voice_url = form.VoiceUrl;
+        else if ('VoiceUrl' in form) ignoredVoiceUrlUpdates -= 1;
         if ('SmsUrl' in form) a.sms_url = form.SmsUrl;
         if ('SmsStatusCallback' in form) a.sms_status_callback = form.SmsStatusCallback;
         return send(res, 200, a);
@@ -253,6 +268,10 @@ function startFakeTwilio({ accountSid = ACCOUNT_SID, authToken = AUTH_TOKEN } = 
         },
         // The next matching request (or every one, with persist) fails.
         failNext: (method, pattern, fields = {}) => failures.push({ method, pattern, status: 500, ...fields }),
+        dropNextResponse: (method, pattern) => droppedResponses.push({ method, pattern }),
+        ignoreNextVoiceUrlUpdate: () => {
+          ignoredVoiceUrlUpdates += 1;
+        },
         close: () => new Promise((r) => server.close(r)),
       });
     });

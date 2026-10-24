@@ -103,11 +103,17 @@ test.each([
 test('the Voice URL on Operator’s TwiML App says whether it matches this session’s address', () => {
   const tunnelUrl = 'https://fictional-dev-domain.ngrok-free.app';
   const status = { ok: true, managed: true, service: { state: 'ready', url: SERVICE }, tunnel: { state: 'ready', url: tunnelUrl, reason: null } };
-  const voiceRow = (voiceUrl, shown = status) =>
-    rows(render(<ConnectionPanel status={shown} voice={voice} sms={sms} setup={{ ok: true, credentials: true, connection: { account: { state: 'ok' }, voiceUrl } }} />))['Voice URL'];
+  const voiceRow = (voiceUrl, shown = status, voiceUrlVerified, voiceUrlCheckedAt) =>
+    rows(render(<ConnectionPanel status={shown} voice={voice} sms={sms} setup={{ ok: true, credentials: true, connection: { account: { state: 'ok' }, voiceUrl, voiceUrlVerified, voiceUrlCheckedAt } }} />))['Voice URL'];
 
   expect(voiceRow(null)).toBe('Not set yet. Open Twilio account and connect to create Operator’s TwiML App.');
   expect(voiceRow(`${tunnelUrl}/twiml`)).toBe(`${tunnelUrl}/twiml matches this session’s address.`);
+  expect(voiceRow(`${tunnelUrl}/twiml`, status, false, Date.UTC(2026, 9, 24, 3, 0))).toMatch(
+    /^Last observed .*: https:\/\/fictional-dev-domain\.ngrok-free\.app\/twiml\. Operator could not verify this as the active Voice URL for this session\. Retry Connect or choose Check connection now in Twilio account\./
+  );
+  expect(voiceRow(null, status, false)).toBe(
+    'The TwiML App Voice URL was not verified. Retry Connect or choose Check connection now in Twilio account.'
+  );
   expect(voiceRow('https://fictional-old-domain.ngrok-free.app/twiml')).toBe(
     `https://fictional-old-domain.ngrok-free.app/twiml does not match this session’s address (${tunnelUrl}/twiml). Operator corrects it when npm run phone starts.`
   );

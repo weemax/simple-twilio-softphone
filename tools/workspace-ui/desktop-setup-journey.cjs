@@ -223,10 +223,26 @@ const operatorApps = () => fake.state.apps.filter((a) => a.friendly_name.startsW
   await nav('Settings').click();
   await button('Connection').click();
   await page.getByText(/Twilio could not be reached at the last check; nothing was changed/).waitFor();
+  await page.getByText(/Operator could not verify this Voice URL on the last check/).waitFor();
+  const failedStatus = await page.evaluate(() => window.operator.setup.status());
+  assert.equal(failedStatus.connection.voiceUrlVerified, false);
+  assert.equal(failedStatus.connection.voiceUrl, `${PUBLIC}/twiml`);
   assert.deepEqual(fake.writes(), []);
   await page.screenshot({ path: path.join(evidence, 'setup-7-unreachable.png'), fullPage: true });
-  check('With Twilio unreachable the launch changed nothing and the Connection view said so');
+  check('With Twilio unreachable the launch changed nothing and Connection showed the last observed Voice URL as unverified');
   fake.setUnreachable(false);
+  fake.clearRequests();
+  await button('Twilio account').click();
+  await button('Check connection now').click();
+  await page.getByText('Everything Operator owns is in place. Nothing needed repair.').waitFor();
+  const retriedStatus = await page.evaluate(() => window.operator.setup.status());
+  assert.equal(retriedStatus.connection.voiceUrlVerified, true);
+  assert.equal(retriedStatus.connection.voiceUrl, `${PUBLIC}/twiml`);
+  assert.deepEqual(fake.writes(), []);
+  await button('Connection').click();
+  await page.getByText(`${PUBLIC}/twiml. No tunnel address this session to compare it with.`).waitFor();
+  await page.screenshot({ path: path.join(evidence, 'setup-8-retried-connection.png'), fullPage: true });
+  check('Check connection now retried after the outage, verified the same owned app, and restored current status without writes');
 
   fs.writeFileSync(
     path.join(evidence, 'desktop-setup-journey.json'),
