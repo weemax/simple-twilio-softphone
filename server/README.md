@@ -127,6 +127,41 @@ TWILIO_AUTH_TOKEN=your_auth_token_here
 PUBLIC_BASE_URL=https://YOUR-DOMAIN.ngrok-free.app
 ```
 
+## Photos
+
+Piece 4 of `docs/phone-ux-plan.md`. Photos are stored in `sms-media/` next to
+`sms-store.json` (`SMS_MEDIA_DIR` overrides; `server/sms-media/` is git-ignored; the folder is
+`0700`, files `0600`, and a `media-index.json` lists them). Kinds: **draft** (attached in the
+composer, local only) and **message** (sent or received).
+
+Private routes (local API key, never through the tunnel):
+
+| Route | Does |
+| --- | --- |
+| `POST /sms/media?name=` | Attach: the body is the photo's bytes. Checked by contents (`imageCheck.js`: PNG sections and check values, JPEG markers and end, bounded dimensions), never by name or type. 415 for anything else, 413 at 5 MB or more. |
+| `GET /sms/media/<id>` · `DELETE /sms/media/<id>` | Read a photo for the app's previews; discard a draft photo (a message's photos are not deleted this way). |
+| `GET /sms/media-policy?to=` | What photos to this number would meet: country, MMS capability of the sending number (one read-only request, cached five minutes), public address, limits. |
+| `POST /sms/media-prune` | Delete draft photos the app no longer lists (older than ten minutes). |
+| `POST /sms/send` | Takes `media: [photo ids]`; a photo-only message has an empty `body`. |
+
+`/sms/send` with photos checks everything before anything is stored as sent or linked
+(`photoPolicy.js`): at most 10, text and photos under 5 MB, a destination whose area code is
+in the United States or Canada (`nanpAreaCodes.js`), a sender not known to lack MMS, and
+`PUBLIC_BASE_URL`. Only then are the photos taken out of the drafts, each given a new link, and
+the message handed to Twilio with `mediaUrl`. After a confirmed failure the links are revoked and
+the photos stay with the failed message for a reviewed resend (to the same number only); after
+an unknown result the links stay open and the photos cannot be sent again from here. Clearing a
+thread, or the 500-message retention, deletes the files and links of photos no stored message
+holds.
+
+Incoming photos (`NumMedia`/`MediaUrlN` on the signed `/sms/inbound`): the webhook is answered
+at once with each JPEG/PNG shown as pending; `mediaFetch.js` then downloads each from
+`https://api.twilio.com/2010-04-01/Accounts/<this account>/Messages/…/Media/…` only, follows at
+most three redirects and only to `*.twiliocdn.com` over https, sends the API key to the first
+address only, refuses private-network addresses, and stops at 5 MB or 20 seconds. Anything else
+(other types, other hosts or accounts, too large, unreadable) becomes a placeholder with a reason.
+Downloads a stop interrupted show as unavailable after the next start.
+
 ## Public and private routes
 
 A tunnel such as ngrok forwards the internet to this server **from
@@ -138,7 +173,12 @@ from the Operator app". The server therefore splits its routes:
   health check) must reach, and their responses carry no secrets or
   message history. All of them except `/health` are Twilio's webhooks and
   also need a valid Twilio signature (next section).
-- **Private**: everything else — today `/token`, `/sms/send`, `/sms/conversations`, `/me` and `/sms/clear`. A new route is private unless it is added to
+- **Photo links** (`/media/<token>`): public too, but only a 43-character random token that
+  was minted for one photo of a message the person just sent answers, for 24 hours. Every
+  other path under `/media/`, a photo id, a listing or a path that leaves the folder is a
+  plain 404; only `GET`/`HEAD` are accepted. See [Photos](#photos).
+- **Private**: everything else — today `/token`, `/sms/send`, `/sms/conversations`, `/me`, `/sms/clear`
+  and the photo routes `/sms/media*`. A new route is private unless it is added to
   `PUBLIC_ROUTES` on purpose. A private request must:
   1. arrive on a loopback connection (else `403 local only`);
   2. carry no proxy/tunnel forwarding headers (`Forwarded`, `Via`,

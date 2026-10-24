@@ -54,6 +54,11 @@ export function useSmsClient() {
     (number) => service.clearThread(number),
     [service]
   );
+  const attachPhoto = useCallback((file) => service.attachPhoto(file), [service]);
+  const photoBlob = useCallback((id) => service.photoBlob(id), [service]);
+  const discardPhoto = useCallback((id) => service.discardPhoto(id), [service]);
+  const prunePhotos = useCallback((keep) => service.prunePhotos(keep), [service]);
+  const photoPolicy = useCallback((to) => service.photoPolicy(to), [service]);
   const destroy = useCallback(() => service.destroy(), [service]);
 
   return {
@@ -63,6 +68,11 @@ export function useSmsClient() {
     send,
     getThread,
     clearThread,
+    attachPhoto,
+    photoBlob,
+    discardPhoto,
+    prunePhotos,
+    photoPolicy,
     destroy,
   };
 }

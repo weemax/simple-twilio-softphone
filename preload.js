@@ -34,6 +34,11 @@ const INVOKABLE_CHANNELS = new Set([
   'sms:send',
   'sms:clear',
   'sms:me',
+  'sms:attach',
+  'sms:media',
+  'sms:media-discard',
+  'sms:media-prune',
+  'sms:media-policy',
 ]);
 
 /**
@@ -101,9 +106,22 @@ const api = {
     // for single-thread fetch, or { ok: false, error } on failure.
     // Pass { number: '+1…' } to fetch a single thread; omit for all.
     list: (opts) => ipcRenderer.invoke('sms:list', opts || {}),
-    // payload: { to: '+1…', body: '…' }.
-    // Returns { ok: true, sid, to, status } or { ok: false, error }.
+    // payload: { to: '+1…', body: '…', media?: [photo ids] }. A photo-only
+    // message has an empty body. Returns { ok: true, sid, to, status, mms }
+    // or { ok: false, error, status }.
     send: (payload) => ipcRenderer.invoke('sms:send', payload),
+    // Photos. Attaching keeps the photo on this computer only; nothing is
+    // uploaded or linked until sms.send includes its id.
+    //   attach({ name, bytes: Uint8Array }) -> { ok, media: { id, type, bytes, width, height, name } }
+    //   media({ id })                       -> { ok, type, bytes }
+    //   discardMedia({ id })                -> { ok, removed }  (drafts only)
+    //   pruneMedia({ keep: [ids] })         -> { ok, removed }  (unlisted old drafts)
+    //   photoPolicy({ to })                 -> { ok, supported, reason, country, sender, limits }
+    attach: (payload) => ipcRenderer.invoke('sms:attach', payload),
+    media: (payload) => ipcRenderer.invoke('sms:media', payload),
+    discardMedia: (payload) => ipcRenderer.invoke('sms:media-discard', payload),
+    pruneMedia: (payload) => ipcRenderer.invoke('sms:media-prune', payload),
+    photoPolicy: (payload) => ipcRenderer.invoke('sms:media-policy', payload),
     // payload: { number: '+1…' }. Wipes local history for that thread.
     // Returns { ok: true, cleared, number, messages: [] } or { ok: false, error }.
     clear: (payload) => ipcRenderer.invoke('sms:clear', payload),

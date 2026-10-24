@@ -30,8 +30,36 @@ const path = require('path');
 const MAX_MESSAGES_PER_THREAD = 500; // hard cap to keep the file small
 const MAX_BODY_LENGTH = 1600; // Twilio Programmable SMS hard limit
 
+// What a stored photo entry may carry. `state`: ready (a stored JPEG/PNG),
+// pending (an incoming photo still downloading) or unavailable (it will not
+// show, with a `reason` the renderer words for the person).
+const MEDIA_STATES = new Set(['ready', 'pending', 'unavailable']);
+function cleanMedia(list) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((m) => m && typeof m.id === 'string' && /^[a-f0-9]{32}$/.test(m.id))
+    .slice(0, 11)
+    .map((m) => {
+      const out = { id: m.id, state: MEDIA_STATES.has(m.state) ? m.state : 'ready' };
+      if (out.state === 'ready') {
+        out.type = m.type === 'image/png' ? 'image/png' : 'image/jpeg';
+        for (const k of ['bytes', 'width', 'height']) out[k] = Number(m[k]) || 0;
+        if (typeof m.name === 'string') out.name = m.name.slice(0, 80);
+      } else if (out.state === 'unavailable') {
+        out.reason = typeof m.reason === 'string' ? m.reason.slice(0, 40) : 'unavailable';
+      }
+      if (typeof m.contentType === 'string') out.contentType = m.contentType.slice(0, 80);
+      return out;
+    });
+}
+const mediaIds = (messages) =>
+  messages.flatMap((m) => (Array.isArray(m.media) ? m.media.map((x) => x.id) : []));
+
 class SmsStore {
-  constructor(filePath) {
+  // `onRelease(ids)` is called after photos stop belonging to any stored
+  // message (history cleared, oldest messages dropped), so their files can go.
+  constructor(filePath, { onRelease = () => {} } = {}) {
+    this.onRelease = onRelease;
     this.filePath = filePath;
     this.tmpPath = filePath + '.tmp';
     this._mu = Promise.resolve(); // mutex chain
@@ -86,6 +114,7 @@ class SmsStore {
         lastMessageAt: c.lastMessageAt || 0,
         lastBody: c.lastBody || '',
         lastDirection: c.lastDirection || null,
+        lastMediaCount: lastMediaCount(c),
         messageCount: c.messages.length,
         messages: c.messages.slice(), // copy so caller can't mutate
       }))
@@ -102,14 +131,47 @@ class SmsStore {
       lastMessageAt: c.lastMessageAt || 0,
       lastBody: c.lastBody || '',
       lastDirection: c.lastDirection || null,
+      lastMediaCount: lastMediaCount(c),
       messageCount: c.messages.length,
       messages: c.messages.slice(),
     };
   }
 
+  // The photo ids held by messages to `number` that are confirmed failed: the
+  // only sent photos a reviewed resend may use again.
+  failedMediaIds(number) {
+    const key = normalizeNumber(number);
+    const conv = key && this._data[key];
+    if (!conv) return new Set();
+    return new Set(
+      mediaIds(
+        conv.messages.filter((m) => m.direction === 'outbound' && ['failed', 'undelivered'].includes(m.status))
+      )
+    );
+  }
+
+  // Every photo id some stored message holds.
+  referencedMediaIds() {
+    return new Set(Object.values(this._data).flatMap((c) => mediaIds(c.messages)));
+  }
+
+  // Tell onRelease about photos no stored message holds any more.
+  _release(candidateIds) {
+    if (!candidateIds.length) return;
+    const held = this.referencedMediaIds();
+    const gone = candidateIds.filter((id) => !held.has(id));
+    if (gone.length) {
+      try {
+        this.onRelease(gone);
+      } catch (err) {
+        console.error(`[sms-store] could not release photos: ${err.message}`);
+      }
+    }
+  }
+
   // --- mutation ---
 
-  appendMessage({ number, sid, direction, body, at, status }) {
+  appendMessage({ number, sid, direction, body, at, status, media }) {
     const key = normalizeNumber(number);
     if (!key) {
       return Promise.reject(new Error('invalid phone number'));
@@ -118,8 +180,10 @@ class SmsStore {
     const ts = typeof at === 'number' && Number.isFinite(at) ? at : Date.now();
     const safeStatus = String(status || (direction === 'outbound' ? 'sent' : 'received'));
     const safeSid = sid ? String(sid) : `local-${ts}-${Math.random().toString(36).slice(2, 8)}`;
+    const safeMedia = cleanMedia(media);
 
     return this._withLock(() => {
+      let evicted = [];
       let conv = this._data[key];
       if (!conv) {
         conv = {
@@ -138,15 +202,20 @@ class SmsStore {
         at: ts,
         status: safeStatus,
       };
+      if (safeMedia.length) {
+        msg.media = safeMedia;
+        if (msg.direction === 'outbound') msg.mms = true;
+      }
       conv.messages.push(msg);
       // Cap the per-thread history. Drop oldest first.
       if (conv.messages.length > MAX_MESSAGES_PER_THREAD) {
-        conv.messages.splice(0, conv.messages.length - MAX_MESSAGES_PER_THREAD);
+        evicted = mediaIds(conv.messages.splice(0, conv.messages.length - MAX_MESSAGES_PER_THREAD));
       }
       conv.lastMessageAt = ts;
       conv.lastBody = safeBody;
       conv.lastDirection = msg.direction;
       this._persist();
+      this._release(evicted);
       return { ...conv, messages: conv.messages.slice() };
     });
   }
@@ -163,11 +232,13 @@ class SmsStore {
       if (!conv) {
         return { cleared: false, number: key };
       }
+      const dropped = mediaIds(conv.messages);
       conv.messages = [];
       conv.lastMessageAt = 0;
       conv.lastBody = '';
       conv.lastDirection = null;
       this._persist();
+      this._release(dropped);
       return {
         cleared: true,
         number: key,
@@ -212,6 +283,50 @@ class SmsStore {
       return false;
     });
   }
+
+  // Change one photo entry of a message (found by the message's SID and the
+  // photo's id): a download finished or failed. Returns false when the message
+  // is no longer stored (the thread was cleared meanwhile), so the caller can
+  // drop what it downloaded.
+  updateMedia({ sid, id, patch }) {
+    return this._withLock(() => {
+      for (const conv of Object.values(this._data)) {
+        const m = conv.messages.find((x) => x.sid === sid);
+        const entry = m && Array.isArray(m.media) ? m.media.find((x) => x.id === id) : null;
+        if (entry) {
+          const [next] = cleanMedia([{ ...patch, id }]);
+          for (const k of Object.keys(entry)) delete entry[k];
+          Object.assign(entry, next);
+          this._persist();
+          return true;
+        }
+      }
+      return false;
+    });
+  }
+
+  // Photos still downloading when the service stopped will not finish.
+  failPendingMedia() {
+    let changed = false;
+    for (const conv of Object.values(this._data)) {
+      for (const m of conv.messages) {
+        for (const entry of m.media || []) {
+          if (entry.state === 'pending') {
+            entry.state = 'unavailable';
+            entry.reason = 'interrupted';
+            changed = true;
+          }
+        }
+      }
+    }
+    if (changed) this._persist();
+    return changed;
+  }
+}
+
+function lastMediaCount(conv) {
+  const last = conv.messages[conv.messages.length - 1];
+  return last && Array.isArray(last.media) ? last.media.length : 0;
 }
 
 // E.164 normalization. We accept whatever the caller passes, strip

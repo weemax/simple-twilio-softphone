@@ -110,3 +110,6 @@ tests/**/node_modules
 
 # npm run phone: run lock and session status (pids, ports, tunnel address)
 .operator-phone/
+
+# Photos attached to or received in text messages (never commit)
+server/sms-media/

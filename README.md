@@ -7,7 +7,7 @@ This project is a fork of Kevin Whinnery's abandoned [operator](https://github.c
 ## What's in the box
 
 - **Voice calling** — register a Twilio `Device` (WebRTC) inside Electron, dial a number, place a call, mute, hang up, send in-call DTMF, answer/decline inbound calls
-- **SMS workspace** — searchable named conversations, recipient-specific saved drafts, local unread counts, day groups, delivery badges, encoding-aware segment estimates, archive/restore and confirmed local-history clearing. One-to-one text messages; photos follow in a separate accepted piece.
+- **SMS workspace** — searchable named conversations, recipient-specific saved drafts, local unread counts, day groups, delivery badges, encoding-aware segment estimates, archive/restore and confirmed local-history clearing. One-to-one messages, with JPEG/PNG photos to and from United States and Canadian numbers (see [Photos](#photos)).
 - **Contacts** — local add/edit/search/remove, reviewed CSV import, Text opens the right thread, and Call confirms the named destination
 - **Calls** — dialer and persistent recent/missed calls observed by this app; incoming calls stay answerable without discarding drafts
 - **Inbound SMS notifications** — native OS notification + bundled sound on genuinely new inbound messages, deduplicated per session by message SID
@@ -32,7 +32,8 @@ This project is a fork of Kevin Whinnery's abandoned [operator](https://github.c
 | Recent/missed call history | implemented for calls this app observes, not account-wide or closed-app history |
 | SMS: read receipts, typing indicators, group threads | out of scope |
 | One-command startup (`npm run phone`) | working — starts the local service, React, ngrok and the desktop app, waits for each to answer, and stops only what it started; see Quick start |
-| Photos (US/Canada), manual contact queue and reviewed Twilio setup | accepted as separate implementation pieces; see `docs/phone-ux-plan.md` |
+| SMS: photos (MMS) to and from US and Canadian numbers | working — JPEG/PNG, up to 10, under 5 MB with the text, **needs the public tunnel** for sending (24-hour links); see Photos |
+| Manual contact queue | accepted as a separate implementation piece; see `docs/phone-ux-plan.md` |
 | Phone number management UI | not implemented (planned) |
 | Private routes (`/token`, `/sms/send`, `/sms/conversations`) closed to the tunnel | working — tunneled requests get 403; the app's main process uses a per-start local API key |
 | Twilio webhook signature verification (`/twiml`, `/sms/inbound`, `/sms/status`) | working — requests without a valid Twilio signature over the exact public URL get 403; **requires `TWILIO_AUTH_TOKEN` and `PUBLIC_BASE_URL` in `server/.env`**, without which every webhook is refused (see `server/README.md`) |
@@ -124,6 +125,32 @@ TWILIO_AUTH_TOKEN=your_auth_token_here
 Started this way, Settings → Connection says the tunnel was not checked.
 
 Either way, the URLs in the Twilio console must start with exactly the tunnel's address — full walkthroughs in `HANDOFF.md` §3 (voice) and §3b/§3c (SMS). Only the webhook paths and `/health` answer through the tunnel; the private routes refuse tunneled requests, and the webhooks refuse any request Twilio did not sign.
+
+## Photos
+
+Messages sends and receives photos for **United States and Canadian numbers only**: JPEG or PNG,
+at most 10 per message, text and photos together under 5 MB.
+
+- **Attaching keeps a photo on this computer.** *Attach photos* copies the chosen files into
+  `sms-media/` beside the message store (owner-only) and previews them in the draft. Nothing is
+  uploaded and no link exists until you press **Send**. Each recipient's photos are saved with
+  their draft and survive a restart; remove them one at a time with ×.
+- **Checked before Send.** The destination must be in the United States or Canada by area code
+  (`+1` alone also covers Jamaica, Puerto Rico and other countries, which are refused), the
+  sending number must not be known to lack MMS, and Operator's public address must be set.
+  Each refusal shows a notice in the composer with no fallback to an SMS link. A tunnel that is
+  not ready blocks photos only; texts and history keep working.
+- **What Send does.** Only the selected photos get links, `PUBLIC_BASE_URL/media/<random token>`,
+  valid for 24 hours and served through the tunnel as exactly that photo (nothing lists or
+  guesses them). A confirmed failure closes the links; an unknown result leaves them open and
+  never offers a resend. The message is labelled **MMS**, billed by Twilio as a picture message
+  rather than by SMS segments.
+- **Incoming photos.** The service downloads JPEG/PNG from Twilio's own media address for your
+  account only (redirects only to Twilio's media CDN, credentials never forwarded, at most
+  5 MB, 20 seconds). Other types, oversized, unreadable or unapproved photos show a placeholder
+  that says why. Click a photo for a larger local view.
+- **Clear** removes this computer's copies and closes their links, never the provider's or the
+  recipient's.
 
 ## Daily workspace
 

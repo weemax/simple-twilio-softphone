@@ -106,11 +106,14 @@ const fakeTwilio = Object.assign(
   () => ({
     messages: {
       create: async (p) => {
-        if (p.body.includes('[unknown]'))
+        // What the service handed to Twilio, for the journey to read (photo links included).
+        fs.appendFileSync(path.join(profile, 'sent-requests.jsonl'), JSON.stringify(p) + '\n');
+        const body = p.body || '';
+        if (body.includes('[unknown]'))
           throw Object.assign(new Error('Connection ended'), {
             code: 'ETIMEDOUT',
           });
-        if (p.body.includes('[fail]'))
+        if (body.includes('[fail]'))
           throw Object.assign(new Error('Invalid destination'), {
             status: 400,
             code: 21211,
@@ -152,6 +155,10 @@ Module._load = function (name, parent, isMain) {
   }
   return original.call(this, name, parent, isMain);
 };
+// The service looks up the sending number's photo (MMS) capability with a read-only
+// request; in this launcher that goes to the fictional Twilio the journey started
+// (OPERATOR_TWILIO_API_BASE) or, without one, to a closed loopback port, never the internet.
+if (!process.env.OPERATOR_TWILIO_API_BASE) process.env.OPERATOR_TWILIO_API_BASE = 'http://127.0.0.1:9';
 const loadURL = BrowserWindow.prototype.loadURL;
 BrowserWindow.prototype.loadURL = function () {
   return loadURL.call(this, process.env.OPERATOR_FIXTURE_URL);
@@ -166,6 +173,7 @@ app.on('web-contents-created', (_e, contents) => {
   // What a launch does once the service listens: check what Operator owns.
   if (fresh) serverModule.startRepair();
   const base = 'http://127.0.0.1:' + server.address().port;
+  fs.writeFileSync(path.join(profile, 'server-port'), String(server.address().port));
   // Brokers use the real private key against the isolated server, not the installed app.
   process.env.TOKEN_BACKEND_URL = base + '/token';
   process.env.SMS_BACKEND_URL = base;

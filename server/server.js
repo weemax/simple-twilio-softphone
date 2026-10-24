@@ -3,7 +3,8 @@
 // Listens on http://127.0.0.1:5050 by default. NEVER bind to 0.0.0.0 — this
 // server signs tokens with your Twilio API Secret.
 //
-// Only the routes in PUBLIC_ROUTES (Twilio's webhooks and /health) may be
+// Only the routes in PUBLIC_ROUTES (Twilio's webhooks and /health), plus the
+// unguessable 24-hour photo links under /media/ (see handleMediaLink), may be
 // reached through a tunnel. Every other route is private: see
 // checkPrivateAccess for what a request must show to reach one. Twilio's
 // webhooks must also carry a valid Twilio signature: see
@@ -53,6 +54,10 @@ const twilio = require('twilio');
 const { SmsStore, normalizeNumber, MAX_BODY_LENGTH } = require('./smsStore');
 const { createConfig } = require('./config');
 const { createSetup, SetupError } = require('./setup');
+const { createApi } = require('./twilioApi');
+const { MediaStore, MediaError, MAX_FILE_BYTES } = require('./mediaStore');
+const { checkPhotoSend, photoCountry, MAX_PHOTOS, MAX_MESSAGE_BYTES, LINK_HOURS } = require('./photoPolicy');
+const { fetchTwilioMedia, FetchError } = require('./mediaFetch');
 const {
   generateKey,
   writeKeyFile,
@@ -97,7 +102,20 @@ const setup = createSetup({
 const SMS_STORE_PATH =
   process.env.SMS_STORE_PATH ||
   path.join(__dirname, 'sms-store.json');
-const smsStore = new SmsStore(SMS_STORE_PATH);
+// Photos (attached drafts, sent and received) live in a folder beside it.
+const MEDIA_DIR = process.env.SMS_MEDIA_DIR || path.join(path.dirname(SMS_STORE_PATH), 'sms-media');
+const mediaStore = new MediaStore({ dir: MEDIA_DIR });
+// Photos leave disk when no stored message holds them any more.
+const smsStore = new SmsStore(SMS_STORE_PATH, {
+  onRelease: (ids) => mediaStore.deleteMessagePhotos(ids),
+});
+// A download interrupted by the last stop will not finish; files nothing refers to go.
+smsStore.failPendingMedia();
+{
+  const held = smsStore.referencedMediaIds();
+  mediaStore.deleteMessagePhotos(mediaStore.ids('message').filter((id) => !held.has(id)));
+  mediaStore.reconcile();
+}
 
 // Build the absolute status-callback URL we tell Twilio to POST to. Twilio
 // requires a publicly reachable URL — in dev that's the ngrok tunnel plus
@@ -208,6 +226,7 @@ const PUBLIC_ROUTES = new Set(['/health', ...TWILIO_WEBHOOK_ROUTES]);
 
 // Set by startServer(). Until then every private request is refused.
 let localApiKey = null;
+let mediaPruneTimer = null;
 
 // Headers a reverse proxy or tunnel adds when it forwards a request (ngrok
 // adds the three X-Forwarded-* ones; Cloudflare Tunnel adds
@@ -354,6 +373,11 @@ const server = http.createServer(async (req, res) => {
   // Operator app on this machine. /token returns auth-signed JWTs.
   const url = (req.url || '').split('?')[0];
 
+  // Photo links: public, but only a well-formed unexpired token answers.
+  if (url === '/media' || url.startsWith('/media/')) {
+    return handleMediaLink(req, res, url);
+  }
+
   if (!PUBLIC_ROUTES.has(url)) {
     const denied = checkPrivateAccess(req);
     if (denied) return send(res, denied.status, { error: denied.error });
@@ -398,6 +422,20 @@ const server = http.createServer(async (req, res) => {
       return send(res, 405, { error: 'method not allowed' });
     }
     return handleSmsList(req, res);
+  }
+
+  if (url === '/sms/media-policy') {
+    if (req.method !== 'GET') return send(res, 405, { error: 'method not allowed' });
+    return handleMediaPolicy(req, res);
+  }
+
+  if (url === '/sms/media-prune') {
+    if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+    return handleMediaPrune(req, res);
+  }
+
+  if (url === '/sms/media' || url.startsWith('/sms/media/')) {
+    return handleLocalMedia(req, res, url);
   }
 
   if (url === '/sms/clear') {
@@ -702,6 +740,150 @@ function readFormBody(req, maxBytes = 64 * 1024) {
   });
 }
 
+// --- photos ---
+
+// The sender's MMS capability: 'yes', 'no' or 'unknown'. One read-only request
+// for the account's numbers with the Operator API key, remembered for five
+// minutes; if Twilio cannot be asked, what the in-app setup last saw for the
+// connected number, else 'unknown'. Only a definite 'no' blocks a photo.
+const MMS_CACHE_MS = 5 * 60 * 1000;
+const mmsCache = new Map();
+async function senderMms(from) {
+  const hit = mmsCache.get(from);
+  if (hit && Date.now() - hit.at < MMS_CACHE_MS) return hit.value;
+  const c = cfg();
+  let value = 'unknown';
+  try {
+    const api = createApi({ accountSid: c.accountSid, apiKey: c.apiKey, apiSecret: c.apiSecret, env: process.env, timeoutMs: 5000 });
+    const { numbers } = await api.listNumbers();
+    const found = numbers.find((n) => n.e164 === from);
+    if (found) value = found.capabilities.mms ? 'yes' : 'no';
+  } catch (_) {
+    const known = setup.status();
+    if (known.number === from && known.connection.mms !== 'unknown') value = known.connection.mms;
+  }
+  if (value !== 'unknown') mmsCache.set(from, { value, at: Date.now() });
+  return value;
+}
+
+// The public photo link route: GET/HEAD /media/<token>. Only a random token
+// minted for one photo of a message the person sent answers, and only until
+// it expires. Every other path under /media/ (a listing, a photo id, a path
+// that tries to leave the folder) is the same plain 404.
+function handleMediaLink(req, res, url) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return send(res, 405, { error: 'method not allowed' }, { Allow: 'GET, HEAD' });
+  }
+  const m = /^\/media\/([^/]+)$/.exec(url);
+  const found = m ? mediaStore.resolveLink(m[1]) : { ok: false, status: 404 };
+  if (!found.ok) {
+    return send(res, found.status, { error: found.status === 410 ? 'link expired' : 'not found' });
+  }
+  res.writeHead(200, {
+    'Content-Type': found.meta.type,
+    'Content-Length': found.bytes.length,
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'; sandbox",
+    'Content-Disposition': 'inline',
+  });
+  res.end(req.method === 'HEAD' ? undefined : found.bytes);
+}
+
+// GET /sms/media-policy?to=+1… — what photos to this number would meet, so the
+// composer can say so before Send. Private like every route not public.
+async function handleMediaPolicy(req, res) {
+  const to = normalizeNumber(new URL(req.url, 'http://localhost').searchParams.get('to') || '');
+  const from = cfg().smsFrom || cfg().callerId || null;
+  const mms = from && !missingSettings().length ? await senderMms(from) : 'unknown';
+  const country = to ? photoCountry(to) : null;
+  const denied = to
+    ? checkPhotoSend({ to, photos: [], textBytes: 0, publicBaseUrl: cfg().publicBaseUrl, sender: from, senderMms: mms })
+    : { code: 'invalid-number', message: 'Enter a valid number first.' };
+  return send(res, 200, {
+    ok: true,
+    country,
+    supported: !denied,
+    reason: denied,
+    sender: { number: from, mms },
+    publicAddress: Boolean(cfg().publicBaseUrl),
+    limits: { maxPhotos: MAX_PHOTOS, maxBytes: MAX_MESSAGE_BYTES, linkHours: LINK_HOURS },
+  });
+}
+
+async function handleMediaPrune(req, res) {
+  let body;
+  try {
+    body = await readJsonBody(req, 256 * 1024);
+  } catch (err) {
+    return send(res, 400, { error: err.message });
+  }
+  if (!Array.isArray(body.keep) || body.keep.some((id) => !MediaStore.isId(id))) {
+    return send(res, 400, { error: '`keep` must be a list of photo ids' });
+  }
+  return send(res, 200, { ok: true, removed: mediaStore.pruneDrafts(body.keep) });
+}
+
+// The body as bytes. One that passes `maxBytes` is refused (413) once it has
+// been read and thrown away, so the sender sees the answer rather than a closed
+// connection; a body far past the limit is cut off.
+function readBinaryBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on('data', (c) => {
+      total += c.length;
+      if (total <= maxBytes) chunks.push(c);
+      else if (total > maxBytes * 4) req.destroy();
+    });
+    req.on('end', () => {
+      if (total > maxBytes) reject(new MediaError(413, 'This photo is too large.'));
+      else resolve(Buffer.concat(chunks));
+    });
+    req.on('error', reject);
+  });
+}
+
+// Private routes for the app's own copy of photos:
+//   POST   /sms/media?name=…   attach a photo to a draft (nothing leaves this machine)
+//   GET    /sms/media/<id>     the photo's bytes, for previews and the viewer
+//   DELETE /sms/media/<id>     remove a photo from a draft
+async function handleLocalMedia(req, res, url) {
+  try {
+    if (url === '/sms/media') {
+      if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+      const bytes = await readBinaryBody(req, MAX_FILE_BYTES);
+      const name = new URL(req.url, 'http://localhost').searchParams.get('name') || '';
+      return send(res, 200, { ok: true, media: mediaStore.add({ bytes, name, kind: 'draft' }) });
+    }
+    const m = /^\/sms\/media\/([^/]+)$/.exec(url);
+    if (!m || !MediaStore.isId(m[1])) return send(res, 404, { error: 'not found' });
+    if (req.method === 'GET') {
+      const found = mediaStore.read(m[1]);
+      if (!found) return send(res, 404, { error: 'photo not found' });
+      res.writeHead(200, {
+        'Content-Type': found.meta.type,
+        'Content-Length': found.bytes.length,
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      return res.end(found.bytes);
+    }
+    if (req.method === 'DELETE') {
+      return send(res, 200, { ok: true, removed: mediaStore.discardDraft(m[1]) });
+    }
+    return send(res, 405, { error: 'method not allowed' });
+  } catch (err) {
+    if (err instanceof MediaError) {
+      // A request that is still sending its body is closed after the answer.
+      res.once('finish', () => req.destroy());
+      return send(res, err.status, { error: err.message }, { Connection: 'close' });
+    }
+    console.error('[sms-media] request failed:', err.message);
+    return send(res, 500, { error: 'photo request failed' });
+  }
+}
+
 async function handleSmsSend(req, res) {
   let body;
   try {
@@ -712,10 +894,19 @@ async function handleSmsSend(req, res) {
 
   const to = normalizeNumber(body.to);
   const text = typeof body.body === 'string' ? body.body.trim() : '';
+  const mediaIdsInput = body.media === undefined || body.media === null ? [] : body.media;
   if (!to) {
     return send(res, 400, { error: '`to` must be a valid E.164 number' });
   }
-  if (!text) {
+  if (
+    !Array.isArray(mediaIdsInput) ||
+    mediaIdsInput.some((id) => !MediaStore.isId(id)) ||
+    new Set(mediaIdsInput).size !== mediaIdsInput.length
+  ) {
+    return send(res, 400, { error: '`media` must be a list of different photo ids' });
+  }
+  const mediaIds = mediaIdsInput;
+  if (!text && !mediaIds.length) {
     return send(res, 400, { error: '`body` is required' });
   }
   if (text.length > MAX_BODY_LENGTH) {
@@ -731,6 +922,39 @@ async function handleSmsSend(req, res) {
     });
   }
 
+  const from = cfg().smsFrom || cfg().callerId;
+
+  // Photos: every limit and route check runs before anything is stored as
+  // sent, linked or handed to Twilio, and a refusal changes nothing.
+  let photos = [];
+  if (mediaIds.length) {
+    const mms = from ? await senderMms(from) : 'unknown';
+    // Re-read after the await: only a draft, or a photo of a message to this
+    // number that is confirmed failed, can be sent.
+    const failedHere = smsStore.failedMediaIds(to);
+    photos = mediaIds.map((id) => mediaStore.get(id));
+    if (photos.some((p) => !p || !(p.kind === 'draft' || (p.kind === 'message' && failedHere.has(p.id))))) {
+      return send(res, 400, {
+        error: 'A photo is no longer available to send. Remove it and attach it again.',
+        status: 'failed',
+        code: 'photo-unavailable',
+      });
+    }
+    const denied = checkPhotoSend({
+      to,
+      photos,
+      textBytes: Buffer.byteLength(text),
+      publicBaseUrl: cfg().publicBaseUrl,
+      sender: from,
+      senderMms: mms,
+    });
+    if (denied) {
+      return send(res, 400, { error: denied.message, status: 'failed', code: denied.code });
+    }
+    // Taken out of the drafts now, before any wait, so a repeated request cannot send them twice.
+    mediaStore.claim(mediaIds);
+  }
+
   // Persist the outbound message locally *first* so the UI sees it even
   // if Twilio's API call fails. On Twilio success we update the local
   // record with the real SID + status; on failure we mark it failed.
@@ -741,10 +965,18 @@ async function handleSmsSend(req, res) {
     body: text,
     at: Date.now(),
     status: 'sending',
+    media: photos.map((p) => ({
+      id: p.id,
+      state: 'ready',
+      type: p.type,
+      bytes: p.bytes,
+      width: p.width,
+      height: p.height,
+      name: p.name,
+    })),
   });
   const placeholderMsg = placeholder.messages[placeholder.messages.length - 1];
 
-  const from = cfg().smsFrom || cfg().callerId;
   if (!from) {
     const failed = await smsStore._withLock(() => {
       placeholderMsg.status = 'failed';
@@ -760,7 +992,12 @@ async function handleSmsSend(req, res) {
   // configured, ask Twilio to POST to it whenever this message's
   // delivery status changes (queued -> sent -> delivered, or -> failed).
   const statusCallbackUrl = getStatusCallbackUrl();
-  const createParams = { to, from, body: text };
+  const createParams = { to, from };
+  if (text) createParams.body = text;
+  if (photos.length) {
+    // Links are made only now, only for these photos, after the person pressed Send.
+    createParams.mediaUrl = mediaIds.map((id) => `${cfg().publicBaseUrl}/media/${mediaStore.mintLink(id).token}`);
+  }
   if (statusCallbackUrl) {
     createParams.statusCallback = statusCallbackUrl;
   }
@@ -787,6 +1024,7 @@ async function handleSmsSend(req, res) {
       sid: result.sid,
       to,
       status: result.status,
+      mms: photos.length > 0,
     });
   } catch (err) {
     // A transport timeout or 5xx may have happened after Twilio accepted the message.
@@ -800,6 +1038,9 @@ async function handleSmsSend(req, res) {
         smsStore._persist();
       }
     });
+    // Twilio refused the message, so its photos will never be fetched. After an
+    // unknown result the links stay: Twilio may still be about to fetch them.
+    if (outcome === 'failed' && photos.length) mediaStore.revokeLinks(mediaIds);
     return send(res, 502, { error: outcome === 'failed' ? 'Twilio rejected the message.' : 'The message outcome is unknown. Check the Twilio message log before resending.', status: outcome });
   }
 }
@@ -819,24 +1060,98 @@ async function handleSmsInbound(params, res) {
     return;
   }
 
+  // Photos: only JPEG and PNG are downloaded. Each shows as pending until
+  // its download finishes; others show a placeholder saying why they do not.
+  const declaredCount = Math.max(0, Math.min(parseInt(params.NumMedia, 10) || 0, 50));
+  const entries = [];
+  const jobs = [];
+  for (let i = 0; i < declaredCount; i++) {
+    const contentType = String(params[`MediaContentType${i}`] || '').toLowerCase().slice(0, 80);
+    const url = String(params[`MediaUrl${i}`] || '');
+    const id = MediaStore.newId();
+    if (i >= MAX_PHOTOS) {
+      if (i === MAX_PHOTOS) entries.push({ id, state: 'unavailable', reason: 'too-many' });
+    } else if (contentType !== 'image/jpeg' && contentType !== 'image/png') {
+      entries.push({ id, state: 'unavailable', reason: 'unsupported-type', contentType });
+    } else {
+      entries.push({ id, state: 'pending', contentType });
+      jobs.push({ id, url });
+    }
+  }
+
+  let storedSid = sid;
   try {
-    await smsStore.appendMessage({
+    const conv = await smsStore.appendMessage({
       number: from,
       sid,
       direction: 'inbound',
       body,
       at: Date.now(),
       status: smsStatus,
+      media: entries,
     });
+    storedSid = conv.messages[conv.messages.length - 1].sid;
   } catch (err) {
     console.error('[sms] inbound persist failed:', err.message);
     // Still 200 to Twilio — we don't want retries for our own bugs.
+    jobs.length = 0;
   }
 
   // Empty TwiML tells Twilio "got it, do nothing." A non-2xx here would
   // cause Twilio to retry.
   res.writeHead(200, { 'Content-Type': 'text/xml; charset=utf-8' });
   res.end('<?xml version="1.0" encoding="UTF-8"?><Response/>');
+
+  if (jobs.length) {
+    const work = downloadIncomingMedia(storedSid, jobs, Buffer.byteLength(body))
+      .catch((err) => console.error('[sms] incoming photo download failed:', err.message))
+      .finally(() => inflightMedia.delete(work));
+    inflightMedia.add(work);
+  }
+}
+
+// Downloads in the background after the webhook has been answered. The
+// message already shows each photo as pending; each finishes as ready or as
+// an unavailable placeholder. Together with the text they stay under 5 MB.
+const inflightMedia = new Set();
+function whenMediaIdle() {
+  return Promise.all([...inflightMedia]);
+}
+
+async function downloadIncomingMedia(messageSid, jobs, textBytes) {
+  const c = cfg();
+  const auth =
+    c.apiKey && c.apiSecret ? { user: c.apiKey, pass: c.apiSecret } : { user: c.accountSid, pass: c.authToken };
+  let budget = MAX_MESSAGE_BYTES - textBytes - 1;
+  for (const job of jobs) {
+    let patch;
+    let bytes = null;
+    try {
+      if (budget <= 0) throw new FetchError('too-large', 'over the message limit');
+      bytes = await fetchTwilioMedia({
+        url: job.url,
+        accountSid: c.accountSid,
+        auth,
+        maxBytes: Math.min(MAX_FILE_BYTES - 1, budget),
+      });
+      budget -= bytes.length;
+      const meta = mediaStore.add({ bytes, kind: 'message', id: job.id });
+      patch = { state: 'ready', type: meta.type, bytes: meta.bytes, width: meta.width, height: meta.height };
+    } catch (err) {
+      const reason =
+        err instanceof MediaError
+          ? err.status === 413
+            ? 'too-large'
+            : 'invalid'
+          : err instanceof FetchError
+            ? err.reason
+            : 'unavailable';
+      patch = { state: 'unavailable', reason };
+    }
+    const stored = await smsStore.updateMedia({ sid: messageSid, id: job.id, patch });
+    // The thread was cleared while this downloaded: nothing refers to the file now.
+    if (!stored && patch.state === 'ready') mediaStore.deleteMessagePhotos([job.id]);
+  }
 }
 
 // Twilio's per-message status callback. POSTs application/x-www-form-urlencoded
@@ -934,6 +1249,9 @@ function startServer({ port = PORT, host = HOST } = {}) {
       try {
         localApiKey = generateKey();
         writeKeyFile(localApiKey);
+        mediaStore.pruneExpiredLinks();
+        mediaPruneTimer = setInterval(() => mediaStore.pruneExpiredLinks(), 10 * 60 * 1000);
+        mediaPruneTimer.unref();
       } catch (err) {
         localApiKey = null;
         server.close();
@@ -961,7 +1279,7 @@ function startRepair() {
     .catch((err) => console.warn('[setup] account check failed:', err.name || 'Error'));
 }
 
-module.exports = { renderTwiml, startServer, startRepair, PUBLIC_ROUTES, operatorNumbers };
+module.exports = { renderTwiml, startServer, startRepair, PUBLIC_ROUTES, operatorNumbers, whenMediaIdle };
 
 if (require.main === module) {
   startServer().then(() => {
@@ -973,7 +1291,7 @@ if (require.main === module) {
     for (const note of startupNotes()) console.warn(`[token-server] ${note}`);
     const sender = cfg().smsFrom || cfg().callerId;
     console.log(
-      `[token-server] sms store: ${SMS_STORE_PATH}` +
+      `[token-server] sms store: ${SMS_STORE_PATH} · photos: ${MEDIA_DIR}` +
         (sender ? ` · sender: ${sender}` : ' · sender: NOT CONFIGURED (sms/send will fail)')
     );
     const cb = getStatusCallbackUrl();

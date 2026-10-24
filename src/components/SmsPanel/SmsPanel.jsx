@@ -8,16 +8,24 @@ import React, {
 } from 'react';
 import { useSms } from '../../contexts/SmsContext';
 import { useWorkspace } from '../../workspace/WorkspaceContext';
+import { useSessionStatus } from '../../workspace/useSessionStatus';
 import {
+  PHOTO_LIMITS,
+  formatSize,
   inboundIds,
+  messageBytes,
   messageKey,
+  messageSummary,
   normalizePhone,
+  photoLabel,
+  sameContent,
   smsEstimate,
   unreadCount,
   uncertainAttempts,
 } from '../../workspace/model';
 import { ConfirmDialog } from '../../workspace/ConfirmDialog';
 import { formatNumber } from '../../formatNumber';
+import { DraftPhotos, MessagePhotos, PhotoViewer } from './Photos';
 
 const MAX_BODY = 1600;
 const EMPTY_CONVERSATIONS = [];
@@ -60,6 +68,9 @@ function ThreadView({
   jump,
   onResend,
   pinToLatestKey,
+  loadPhoto,
+  onOpenPhotos,
+  who,
 }) {
   const savedPosition = useRef(position);
   savedPosition.current = position;
@@ -132,7 +143,15 @@ function ThreadView({
               data-message-id={messageKey(m)}
               className={`sms-bubble ${m.direction}${jump?.sid === messageKey(m) ? ' search-hit' : ''}`}
             >
-              <div className="sms-bubble-body">{m.body}</div>
+              {m.body && <div className="sms-bubble-body">{m.body}</div>}
+              {!!m.media?.length && (
+                <MessagePhotos
+                  media={m.media}
+                  load={loadPhoto}
+                  who={m.direction === 'outbound' ? `you sent to ${who}` : `from ${who}`}
+                  onOpen={(photos, index) => onOpenPhotos(m, photos, index)}
+                />
+              )}
               <div className="sms-bubble-meta">
                 <time
                   dateTime={new Date(m.at).toISOString()}
@@ -140,6 +159,11 @@ function ThreadView({
                 >
                   {formatTime(m.at)}
                 </time>
+                {(m.mms || !!m.media?.length) && (
+                  <span className="sms-mms" title="Sent as a picture message, not a text message">
+                    MMS
+                  </span>
+                )}
                 {m.direction === 'outbound' && (
                   <StatusBadge status={m.status} />
                 )}
@@ -179,11 +203,36 @@ function Composer({
   sending,
   uncertain,
   error,
+  photos,
+  uploading,
+  attachError,
+  onAttach,
+  onRemovePhoto,
+  loadPhoto,
+  photoNotice,
+  photoRefused,
+  canAttach,
+  limits,
 }) {
+  const fileInput = useRef(null);
   const estimate = smsEstimate(text),
     over = text.length > MAX_BODY;
   const attempts = uncertainAttempts(uncertain);
-  const blocked = attempts.some((a) => a.body === text.trim());
+  const photoIds = photos.map((p) => p.id);
+  const blocked = attempts.some((a) =>
+    sameContent({ body: a.body, media: a.media }, { body: text.trim(), media: photoIds }),
+  );
+  const bytes = messageBytes(text.trim(), photos);
+  const tooLarge = photos.length > 0 && bytes >= limits.maxBytes;
+  const photoBlocked = photos.length > 0 && (photoRefused || tooLarge);
+  const canSend =
+    !disabled &&
+    !sending &&
+    !over &&
+    !blocked &&
+    !uploading &&
+    !photoBlocked &&
+    Boolean(text.trim() || photos.length);
   return (
     <div className="sms-composer">
       <label className="small muted" htmlFor="message-draft">
@@ -196,12 +245,51 @@ function Composer({
       )}
       {attempts.map((a) => (
         <p key={`${a.at}:${a.body}`} className="alert small" role="status">
-          Unknown outcome: “{a.body}”. Your draft is retained. Check the
-          provider’s message log; this text cannot be resent here while its
-          outcome is unknown.
+          Unknown outcome: {a.body ? `“${a.body}”` : 'a photo message'}
+          {a.media?.length ? ` with ${photoLabel(a.media.length).toLowerCase()}` : ''}. Your draft is retained.
+          Check the provider’s message log; this {a.media?.length ? 'message' : 'text'} cannot be resent here while
+          its outcome is unknown.
         </p>
       ))}
+      <DraftPhotos
+        photos={photos}
+        load={loadPhoto}
+        onRemove={onRemovePhoto}
+        disabled={sending}
+      />
+      {!!uploading && (
+        <p className="small muted" role="status">
+          Adding {uploading} photo{uploading === 1 ? '' : 's'} on this computer…
+        </p>
+      )}
+      {attachError && (
+        <p className="sms-composer-error small" role="alert">
+          {attachError}
+        </p>
+      )}
       <div className="sms-composer-row">
+        <button
+          type="button"
+          className="attach-photos"
+          disabled={disabled || sending || !canAttach || photos.length >= limits.maxPhotos}
+          onClick={() => fileInput.current?.click()}
+        >
+          Attach photos
+        </button>
+        <input
+          ref={fileInput}
+          type="file"
+          className="visually-hidden"
+          accept="image/jpeg,image/png"
+          multiple
+          aria-label="Choose JPEG or PNG photos to attach"
+          tabIndex={-1}
+          onChange={(e) => {
+            const files = Array.from(e.target.files || []);
+            e.target.value = '';
+            if (files.length) onAttach(files);
+          }}
+        />
         <textarea
           id="message-draft"
           className="sms-composer-input"
@@ -217,8 +305,7 @@ function Composer({
               !e.nativeEvent.isComposing
             ) {
               e.preventDefault();
-              if (!disabled && !sending && !over && !blocked && text.trim())
-                onSend();
+              if (canSend) onSend();
             }
           }}
           disabled={disabled || sending}
@@ -229,34 +316,60 @@ function Composer({
           type="button"
           className="sms-composer-send"
           onClick={onSend}
-          disabled={disabled || sending || !text.trim() || over || blocked}
+          disabled={!canSend}
         >
           {sending ? 'Sending…' : 'Send'}
         </button>
       </div>
+      {photoNotice && (
+        <p className="photo-notice small" role="status">
+          {photoNotice}
+        </p>
+      )}
       <div className="sms-composer-counter muted small">
-        {text.length} / {MAX_BODY} · {estimate.encoding} · {estimate.segments}{' '}
-        SMS segment{estimate.segments === 1 ? '' : 's'}
+        {photos.length ? (
+          <>
+            {text.length} / {MAX_BODY} · MMS (a picture message, not SMS segments) ·{' '}
+            {photoLabel(photos.length).toLowerCase()} · {formatSize(bytes)} of {formatSize(limits.maxBytes)}
+            {tooLarge && <span className="error"> · over the limit</span>}
+          </>
+        ) : (
+          <>
+            {text.length} / {MAX_BODY} · {estimate.encoding} · {estimate.segments}{' '}
+            SMS segment{estimate.segments === 1 ? '' : 's'}
+          </>
+        )}
         {over && (
           <span className="error"> · over by {text.length - MAX_BODY}</span>
         )}
       </div>
-      {estimate.segments > 1 && (
+      {!photos.length && estimate.segments > 1 && (
         <p className="segment-warning small">
           This text uses multiple SMS segments. Your provider may charge for
           each segment; sender-specific limits can differ.
         </p>
       )}
       <p className="muted small composer-help">
-        Enter sends · Shift+Enter adds a line
+        Enter sends · Shift+Enter adds a line · Photos: JPEG or PNG, up to {limits.maxPhotos}, under{' '}
+        {formatSize(limits.maxBytes)} with the text; kept on this computer until you press Send
       </p>
     </div>
   );
 }
 
 export function SmsPanel({ active = true, onCall = () => {} }) {
-  const { snapshot, send, getThread, clearThread } = useSms();
+  const {
+    snapshot,
+    send,
+    getThread,
+    clearThread,
+    attachPhoto,
+    photoBlob,
+    discardPhoto,
+    photoPolicy,
+  } = useSms();
   const { data, update, nameFor } = useWorkspace();
+  const session = useSessionStatus(10000);
   const selected = data.selected;
   const [thread, setThread] = useState(null),
     [loading, setLoading] = useState(false),
@@ -274,6 +387,13 @@ export function SmsPanel({ active = true, onCall = () => {} }) {
     [sendErrors, setSendErrors] = useState({}),
     [resend, setResend] = useState(null),
     [pin, setPin] = useState(0);
+  const [uploading, setUploading] = useState({}),
+    [attachErrors, setAttachErrors] = useState({}),
+    [policy, setPolicy] = useState({}),
+    [viewer, setViewer] = useState(null);
+  const uploadingRef = useRef({}),
+    dataRef = useRef(data);
+  dataRef.current = data;
   const autoSelected = useRef(false);
   const pending = useRef(new Set()),
     input = useRef(null),
@@ -327,7 +447,24 @@ export function SmsPanel({ active = true, onCall = () => {} }) {
     setConfirmClear(false);
     setClearError('');
     setResend(null);
+    setViewer(null);
   }, [selected]);
+  // Whether photos to this number can be sent (country, sending number, public
+  // address) is asked of the local service, so the notice shows before Send.
+  useEffect(() => {
+    if (!selected || typeof photoPolicy !== 'function') return undefined;
+    let cancelled = false;
+    const ask = () =>
+      photoPolicy(selected).then((answer) => {
+        if (!cancelled) setPolicy((p) => ({ ...p, [selected]: answer }));
+      });
+    ask();
+    const timer = setInterval(ask, 60000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [selected, photoPolicy, session?.tunnel?.state]);
   useEffect(() => {
     if (newMode) input.current?.focus();
   }, [newMode]);
@@ -363,6 +500,7 @@ export function SmsPanel({ active = true, onCall = () => {} }) {
           (m) =>
             m.direction === 'outbound' &&
             m.body === a.body &&
+            (m.media?.length || 0) === (a.media?.length || 0) &&
             m.at >= a.at &&
             ['sent', 'queued', 'delivered', 'failed', 'undelivered'].includes(
               m.status,
@@ -387,22 +525,34 @@ export function SmsPanel({ active = true, onCall = () => {} }) {
     }
   }, [conversations, data.uncertain, update]);
 
-  async function sendText(number, body) {
+  async function sendText(number, body, photoList = []) {
     if (pending.current.has(number)) return;
+    const media = photoList.map((p) => p.id);
     if (
-      uncertainAttempts(data.uncertain[number]).some((a) => a.body === body)
+      uncertainAttempts(data.uncertain[number]).some((a) =>
+        sameContent({ body: a.body, media: a.media }, { body, media }),
+      )
     ) {
       setSendErrors((s) => ({
         ...s,
         [number]:
-          'This text has an unknown result. Check the provider’s message log before resending.',
+          'This message has an unknown result. Check the provider’s message log before resending.',
       }));
       return;
     }
     pending.current.add(number);
     setSending((s) => ({ ...s, [number]: true }));
     setSendErrors((s) => ({ ...s, [number]: '' }));
-    const attempt = { body, at: Date.now() };
+    const attempt = { body, at: Date.now(), media };
+    // The photos leave this draft once Twilio has them or may have them: a
+    // sent photo belongs to its message, which shows it.
+    const dropFromDraft = (d) =>
+      media.length
+        ? {
+            ...d.attachments,
+            [number]: (d.attachments[number] || []).filter((p) => !media.includes(p.id)),
+          }
+        : d.attachments;
     const removeAttempt = (d) => {
       const uncertain = { ...d.uncertain };
       uncertain[number] = uncertainAttempts(uncertain[number]).filter(
@@ -419,12 +569,13 @@ export function SmsPanel({ active = true, onCall = () => {} }) {
       },
     }));
     try {
-      await send({ to: number, body });
+      await send(media.length ? { to: number, body, media } : { to: number, body });
       update((d) => {
         const uncertain = removeAttempt(d);
         return {
           ...d,
           uncertain,
+          attachments: dropFromDraft(d),
           drafts: {
             ...d.drafts,
             [number]:
@@ -444,6 +595,8 @@ export function SmsPanel({ active = true, onCall = () => {} }) {
     } catch (e) {
       if (e.outcome === 'failed')
         update((d) => ({ ...d, uncertain: removeAttempt(d) }));
+      // After an unknown result the photos are with the message, never sent again from here.
+      else if (media.length) update((d) => ({ ...d, attachments: dropFromDraft(d) }));
       setSendErrors((s) => ({
         ...s,
         [number]:
@@ -459,6 +612,57 @@ export function SmsPanel({ active = true, onCall = () => {} }) {
       pending.current.delete(number);
       setSending((s) => ({ ...s, [number]: false }));
     }
+  }
+  // Keep chosen files on this computer as draft attachments. Nothing is
+  // uploaded anywhere: only Send, with these photos included, does that.
+  async function attachFiles(number, files) {
+    const limits = policy[number]?.limits || PHOTO_LIMITS;
+    const note = (message) => setAttachErrors((s) => ({ ...s, [number]: message }));
+    note('');
+    let count = (dataRef.current.attachments[number] || []).length + (uploadingRef.current[number] || 0);
+    let bytes = messageBytes(
+      (dataRef.current.drafts[number] || '').trim(),
+      dataRef.current.attachments[number] || [],
+    );
+    for (const file of files) {
+      if (count >= limits.maxPhotos) {
+        note(`A message can carry up to ${limits.maxPhotos} photos. The rest were not added.`);
+        break;
+      }
+      if (bytes + file.size >= limits.maxBytes) {
+        note(`${file.name || 'This photo'} would take the message to ${formatSize(limits.maxBytes)} or more, so it was not added.`);
+        continue;
+      }
+      count++;
+      bytes += file.size;
+      uploadingRef.current[number] = (uploadingRef.current[number] || 0) + 1;
+      setUploading((s) => ({ ...s, [number]: uploadingRef.current[number] }));
+      try {
+        const photo = await attachPhoto(file);
+        update((d) => ({
+          ...d,
+          attachments: { ...d.attachments, [number]: [...(d.attachments[number] || []), photo] },
+        }));
+      } catch (e) {
+        count--;
+        bytes -= file.size;
+        note(e.message || 'Could not add the photo.');
+      } finally {
+        uploadingRef.current[number] -= 1;
+        setUploading((s) => ({ ...s, [number]: uploadingRef.current[number] }));
+      }
+    }
+  }
+  function removePhoto(number, photo) {
+    update((d) => ({
+      ...d,
+      attachments: {
+        ...d.attachments,
+        [number]: (d.attachments[number] || []).filter((p) => p.id !== photo.id),
+      },
+    }));
+    setAttachErrors((s) => ({ ...s, [number]: '' }));
+    discardPhoto?.(photo.id);
   }
   function confirmNew() {
     const n = normalizePhone(newNumber);
@@ -508,6 +712,23 @@ export function SmsPanel({ active = true, onCall = () => {} }) {
   const ourNumber = snapshot.smsFrom || snapshot.callerId;
   const currentThread = thread?.number === selected ? thread : null;
   const text = data.drafts[selected] || '';
+  const photos = data.attachments[selected] || [];
+  const photoAnswer = policy[selected] || null;
+  const tunnelState = session?.tunnel?.state;
+  const tunnelWords = {
+    starting: 'still starting',
+    started: 'still starting',
+    unreachable: 'not reachable',
+    unavailable: 'unavailable',
+    lost: 'no longer running',
+  }[tunnelState];
+  const photoReason = photoAnswer && !photoAnswer.supported ? photoAnswer.reason : null;
+  const photoNotice =
+    photoReason?.message ||
+    (tunnelWords
+      ? `Photos need the public tunnel, which is ${tunnelWords}. Texts still send; photos wait for the tunnel.`
+      : null);
+  const selectedWho = selected ? nameFor(selected) || formatNumber(selected) : '';
   return (
     <section
       className={`sms-panel${selected ? ' has-selection' : ''}`}
@@ -642,7 +863,11 @@ export function SmsPanel({ active = true, onCall = () => {} }) {
                     <span className="sms-list-preview">
                       {data.drafts[c.number]
                         ? `Draft: ${data.drafts[c.number]}`
-                        : c.lastBody || '(empty)'}
+                        : data.attachments[c.number]?.length
+                          ? `Draft: ${photoLabel(data.attachments[c.number].length).toLowerCase()}`
+                          : messageSummary(c.messages?.[c.messages.length - 1]) ||
+                            c.lastBody ||
+                            '(empty)'}
                     </span>
                     {data.seeded && unreadCount(c, data) > 0 && (
                       <span
@@ -773,6 +998,9 @@ export function SmsPanel({ active = true, onCall = () => {} }) {
             jump={jump}
             onResend={(m) => setResend({ number: selected, message: m })}
             pinToLatestKey={pin}
+            loadPhoto={photoBlob}
+            who={selectedWho}
+            onOpenPhotos={(message, shown, index) => setViewer({ photos: shown, index })}
           />
           <Composer
             key={selected || 'none'}
@@ -785,11 +1013,21 @@ export function SmsPanel({ active = true, onCall = () => {} }) {
                 drafts: { ...d.drafts, [selected]: value },
               }))
             }
-            onSend={() => sendText(selected, text.trim())}
+            onSend={() => sendText(selected, text.trim(), photos)}
             disabled={!selected}
             sending={Boolean(sending[selected])}
             uncertain={data.uncertain[selected]}
             error={sendErrors[selected]}
+            photos={photos}
+            uploading={uploading[selected] || 0}
+            attachError={attachErrors[selected]}
+            onAttach={(files) => attachFiles(selected, files)}
+            onRemovePhoto={(p) => removePhoto(selected, p)}
+            loadPhoto={photoBlob}
+            photoNotice={photoNotice}
+            photoRefused={Boolean(photoNotice)}
+            canAttach={photoReason?.code !== 'unsupported-country'}
+            limits={photoAnswer?.limits || PHOTO_LIMITS}
           />
         </div>
       </div>
@@ -802,18 +1040,37 @@ export function SmsPanel({ active = true, onCall = () => {} }) {
           onConfirm={() => {
             const r = resend;
             setResend(null);
-            sendText(r.number, r.message.body);
+            sendText(
+              r.number,
+              r.message.body,
+              (r.message.media || []).filter((m) => m.state === 'ready'),
+            );
           }}
         >
           <p>
             {nameFor(resend.number)} {formatNumber(resend.number)}
           </p>
-          <blockquote>{resend.message.body}</blockquote>
+          {resend.message.body && <blockquote>{resend.message.body}</blockquote>}
+          {!!resend.message.media?.length && (
+            <p>
+              Sends {photoLabel(resend.message.media.length).toLowerCase()} again, as an MMS.
+            </p>
+          )}
           <p>
             The provider confirmed this message failed. Resending creates
             another billable message.
           </p>
         </ConfirmDialog>
+      )}
+      {viewer && (
+        <PhotoViewer
+          photos={viewer.photos}
+          index={viewer.index}
+          load={photoBlob}
+          who={selectedWho}
+          onIndex={(index) => setViewer((v) => ({ ...v, index }))}
+          onClose={() => setViewer(null)}
+        />
       )}
     </section>
   );

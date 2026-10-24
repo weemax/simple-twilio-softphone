@@ -599,7 +599,7 @@ End-to-end SMS chat in the `Messages` tab. Programmable SMS via Twilio REST + in
 - Server matching still accepts formatted numbers; the new workspace requires an explicit + and country code for new recipients and contacts.
 
 **What does NOT work (explicitly out of scope for v1):**
-- MMS / media attachments (accepted as a separate upcoming piece)
+- MMS beyond the accepted photo piece: other countries, GIF/HEIC/video, compression (photos to US/Canada numbers work; see README → Photos)
 - Group threads
 - Read receipts
 - Typing indicators

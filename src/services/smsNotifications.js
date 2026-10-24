@@ -38,7 +38,13 @@ export function notifyInboundSms(message) {
     Promise.resolve(
       show({
         number: message.number,
-        body: message.body || '(empty message)',
+        body:
+          message.body ||
+          (message.media && message.media.length
+            ? message.media.length === 1
+              ? 'Photo'
+              : `${message.media.length} photos`
+            : '(empty message)'),
       })
     ).catch(() => {
       // Native notification support is optional; sound still played.

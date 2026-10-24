@@ -14,6 +14,12 @@
 import { notifyInboundSms } from './smsNotifications';
 
 const POLL_MS = 3000;
+// Photo bytes the renderer keeps so reopening a thread does not fetch them again.
+const PHOTO_CACHE_BYTES = 48 * 1024 * 1024;
+const MAX_PHOTO_FILE_BYTES = 5 * 1024 * 1024;
+
+// The local service's message, without the "SMS backend 415:" the broker adds.
+const plainMessage = (message) => String(message || '').replace(/^SMS backend \d+:\s*/, '');
 // Upper bound on tracked SIDs so a long-running renderer session doesn't
 // grow this set forever. Comfortably larger than any single conversation's
 // server-side history cap (500 messages).
@@ -32,6 +38,8 @@ export class SmsService {
     // for the renderer session so each inbound message alerts at most once.
     this._seenInboundMessageIds = new Set();
     this._hasHydrated = false;
+    this._photoCache = new Map(); // id -> Promise<Blob>, oldest first
+    this._photoCacheBytes = 0;
     this._emit();
   }
 
@@ -229,13 +237,14 @@ export class SmsService {
 
   // --- actions ---
 
-  async send({ to, body }) {
+  // `media` is a list of photo ids from attachPhoto(); a photo-only message has an empty body.
+  async send({ to, body, media }) {
     if (!window.operator || !window.operator.sms) {
       throw new Error('sms bridge not available');
     }
-    const res = await window.operator.sms.send({ to, body });
+    const res = await window.operator.sms.send({ to, body, ...(media && media.length ? { media } : {}) });
     if (!res || !res.ok) {
-      const msg = (res && res.error) || 'send failed';
+      const msg = plainMessage((res && res.error) || 'send failed');
       this.lastError = msg;
       this._emit();
       const error = new Error(msg);
@@ -271,5 +280,97 @@ export class SmsService {
       messageCount: 0,
       messages: [],
     };
+  }
+
+  // --- photos ---
+
+  // Keep a chosen file on this computer as a draft attachment. Nothing is
+  // uploaded and no link exists until a message that includes it is sent.
+  // Resolves { id, type, bytes, width, height, name }.
+  async attachPhoto(file) {
+    const api = window.operator && window.operator.sms;
+    if (!api || typeof api.attach !== 'function') {
+      throw new Error('Restart the app to enable photos.');
+    }
+    if (file.size >= MAX_PHOTO_FILE_BYTES) {
+      throw new Error(`${file.name || 'This photo'} is 5 MB or larger. A message can carry under 5 MB in all.`);
+    }
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const res = await api.attach({ name: file.name, bytes });
+    if (!res || !res.ok) throw new Error(plainMessage(res && res.error) || 'Could not attach the photo.');
+    return res.media;
+  }
+
+  // The photo as a Blob (a draft, sent or received photo), kept in a small cache.
+  photoBlob(id) {
+    const cached = this._photoCache.get(id);
+    if (cached) {
+      // Most recently used goes last.
+      this._photoCache.delete(id);
+      this._photoCache.set(id, cached);
+      return cached.promise;
+    }
+    const api = window.operator && window.operator.sms;
+    if (!api || typeof api.media !== 'function') {
+      return Promise.reject(new Error('photos unavailable'));
+    }
+    const entry = { size: 0 };
+    entry.promise = api.media({ id }).then((res) => {
+      if (!res || !res.ok) throw new Error(plainMessage(res && res.error) || 'photo unavailable');
+      const blob = new Blob([res.bytes], { type: res.type || 'image/jpeg' });
+      entry.size = blob.size;
+      this._photoCacheBytes += blob.size;
+      this._trimPhotoCache();
+      return blob;
+    });
+    entry.promise.catch(() => {
+      if (this._photoCache.get(id) === entry) this._photoCache.delete(id);
+    });
+    this._photoCache.set(id, entry);
+    return entry.promise;
+  }
+
+  _trimPhotoCache() {
+    for (const [id, entry] of this._photoCache) {
+      if (this._photoCacheBytes <= PHOTO_CACHE_BYTES || this._photoCache.size <= 1) break;
+      this._photoCache.delete(id);
+      this._photoCacheBytes -= entry.size;
+    }
+  }
+
+  // Remove a photo from a draft. Best effort: a photo that already belongs to a
+  // message stays with the message.
+  async discardPhoto(id) {
+    this._photoCache.delete(id);
+    const api = window.operator && window.operator.sms;
+    if (!api || typeof api.discardMedia !== 'function') return;
+    try {
+      await api.discardMedia({ id });
+    } catch (_) {
+      // The next start's cleanup removes an unlisted draft.
+    }
+  }
+
+  async prunePhotos(keep) {
+    const api = window.operator && window.operator.sms;
+    if (!api || typeof api.pruneMedia !== 'function') return;
+    try {
+      await api.pruneMedia({ keep });
+    } catch (_) {
+      // Cleanup only; nothing depends on it.
+    }
+  }
+
+  // What photos to this number would meet (country, sending number, public
+  // address, limits), or null when the service cannot say.
+  async photoPolicy(to) {
+    const api = window.operator && window.operator.sms;
+    if (!api || typeof api.photoPolicy !== 'function') return null;
+    try {
+      const res = await api.photoPolicy({ to });
+      return res && res.ok ? res : null;
+    } catch (_) {
+      return null;
+    }
   }
 }

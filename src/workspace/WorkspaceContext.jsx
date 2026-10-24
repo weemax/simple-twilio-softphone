@@ -11,7 +11,7 @@ import { emptyWorkspace, inboundIds } from './model';
 
 const WorkspaceContext = createContext(null);
 export function WorkspaceProvider({ children }) {
-  const { snapshot } = useSms();
+  const { snapshot, prunePhotos } = useSms();
   const [data, setData] = useState(emptyWorkspace);
   const [ready, setReady] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -40,6 +40,18 @@ export function WorkspaceProvider({ children }) {
       cancelled = true;
     };
   }, []);
+  // Once the saved workspace is read, the local service may delete draft photos
+  // it no longer lists (a removal that never finished); photos of messages are untouched.
+  const pruned = useRef(false);
+  useEffect(() => {
+    if (!ready || pruned.current || typeof prunePhotos !== 'function') return;
+    pruned.current = true;
+    prunePhotos(
+      Object.values(current.current.attachments || {})
+        .flat()
+        .map((p) => p.id),
+    );
+  }, [ready, prunePhotos]);
   const update = useCallback((fn) => {
     const next = fn(current.current);
     if (next === current.current) return;
