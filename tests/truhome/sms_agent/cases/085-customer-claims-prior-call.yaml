@@ -1,0 +1,18 @@
+id: "085"
+title: Customer claims someone already called
+suite: tool-truth/human-cancellation
+source_ref: "10 / 85"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Someone from your team already called me and booked it"
+    expect:
+      max_messages: 1
+      not_regex: "(?i)(you're all set|you are booked|confirmed|I see that)"
+      must_not:
+        - "Treats the claim as proof that a call or booking happened"
+db_expect:
+  - {table: ai_conversation_state, field: booking_offered, op: unchanged}

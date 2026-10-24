@@ -1,0 +1,17 @@
+id: "068"
+title: First refusal to identify ownership
+suite: required-field-refusal
+source_ref: "8 / 68"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Why do you need to know if I own it?"
+    expect:
+      max_messages: 1
+      max_questions: 1
+      must:
+        - "Explains why ownership is needed"
+        - "Asks the ownership question once more"

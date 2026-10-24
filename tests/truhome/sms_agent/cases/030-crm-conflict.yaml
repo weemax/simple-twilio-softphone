@@ -1,0 +1,24 @@
+id: "030"
+title: CRM says windows, customer says roof
+suite: memory/state-order
+source_ref: "4 / 30"
+blocking: false
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  contact:
+    lead_status: New
+setup_verify:
+  - {table: contact_custom_fields, field: "project_details", op: eq, value: windows}
+turns:
+  - send: "Actually it's the roof, not windows"
+    expect:
+      max_questions: 1
+      must:
+        - "Proceeds on roofing"
+      must_not:
+        - "Asks a windows question"
+db_expect:
+  - {table: contact_custom_fields, field: "project_details", op: contains, value: roof}
+blocked_reason: "Requires pre-seeding a custom field before the case; field key map unresolved."

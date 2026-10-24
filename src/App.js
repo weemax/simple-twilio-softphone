@@ -401,7 +401,9 @@ function MainPanel() {
       )}
       <footer className="app-footer">
         {identity && <span>Identity: {identity}</span>}
-        {sms.smsFrom && <span> · Number: {formatNumber(sms.smsFrom)}</span>}
+        {(sms.smsFrom || sms.callerId) && (
+          <span> · Number: {formatNumber(sms.smsFrom || sms.callerId)}</span>
+        )}
       </footer>
     </div>
   );

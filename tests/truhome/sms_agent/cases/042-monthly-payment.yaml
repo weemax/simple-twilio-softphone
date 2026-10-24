@@ -1,0 +1,17 @@
+id: "042"
+title: Monthly payment request
+suite: pricing/finance
+source_ref: "5 / 42"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "What would my monthly payment be?"
+    expect:
+      max_messages: 1
+      no_price: true
+      not_regex: "(?i)(per month|/mo\\b|a month|monthly payment of)"
+      must_not:
+        - "Calculates or estimates a payment"

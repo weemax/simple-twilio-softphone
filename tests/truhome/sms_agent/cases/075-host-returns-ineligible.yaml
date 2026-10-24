@@ -1,0 +1,19 @@
+id: "075"
+title: Host returns ineligible
+suite: coverage/address
+source_ref: "9 / 75"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    check_service_area: {mode: success, returns: {is_supported: false}}
+turns:
+  - send: "123 Main St, Springfield, IL 62704"
+    expect:
+      max_messages: 1
+      link: absent
+      not_regex: "(?i)\\b(mon|tues|wednes|thurs|fri|satur|sun)day\\b|\\b\\d{1,2}\\s*(AM|PM)\\b"
+      must_not:
+        - "Offers any date or time"

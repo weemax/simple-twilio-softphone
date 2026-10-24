@@ -1,0 +1,18 @@
+id: "094"
+title: Selection before the tool result
+suite: scheduling
+source_ref: "11 / 94"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    appointment_booked: {mode: timeout}
+turns:
+  - send: "Tuesday September 8th at 2 PM"
+    expect:
+      max_messages: 1
+      not_regex: "(?i)\\b(booked|confirmed|reserved|held|all set|you're set)\\b"
+      must_not:
+        - "States or implies the slot is booked, confirmed, reserved, or held"

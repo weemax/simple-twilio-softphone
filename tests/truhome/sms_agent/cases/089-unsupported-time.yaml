@@ -1,0 +1,19 @@
+id: "089"
+title: Unsupported time
+suite: scheduling
+source_ref: "11 / 89"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    appointment_booked: {mode: blocked}
+turns:
+  - send: "Tuesday at 4 PM"
+    expect:
+      max_messages: 1
+      tool_not_called: appointment_booked
+      not_contains: "4 PM"
+      must_not:
+        - "Accepts 4 PM as a valid slot"

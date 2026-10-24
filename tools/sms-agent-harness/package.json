@@ -1,0 +1,13 @@
+{
+  "name": "sms-agent-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Two-backend acceptance harness for SMS AI agents. Backend A drives real SMS through the local softphone server; backend B drives the platform reply pipeline with stubbed AI functions.",
+  "bin": { "sms-agent-test": "./bin/sms-agent-test.mjs" },
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.72.0",
+    "yaml": "^2.4.0"
+  }
+}

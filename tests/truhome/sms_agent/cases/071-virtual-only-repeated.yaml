@@ -1,0 +1,24 @@
+id: "071"
+title: Virtual-only requirement repeated closes
+suite: required-field-refusal
+source_ref: "8 / 71"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "I only want a 15-minute Zoom call."
+    expect: {max_questions: 1}
+  - send: "No, virtual only. That's my final answer."
+    expect:
+      max_messages: 1
+      link: absent
+      must:
+        - "Closes the conversation"
+      must_not:
+        - "Schedules or offers to schedule anything"
+  - send: "So no Zoom option at all?"
+    expect:
+      link: absent
+      silence: 120

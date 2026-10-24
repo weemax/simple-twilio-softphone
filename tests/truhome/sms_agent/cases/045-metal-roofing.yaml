@@ -1,0 +1,21 @@
+id: "045"
+title: Metal roofing question
+suite: product/boundaries
+source_ref: "6 / 45"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Do you install steel or metal roofing?"
+    expect:
+      max_messages: 1
+      must:
+        - "Says a specialist will confirm"
+      must_not:
+        - "Confirms or denies that metal roofing is installed"
+        - "Ends the conversation"
+db_expect:
+  - {table: contacts, field: lead_status, op: ne, value: Disqualified}
+notes: "'Do not disqualify' is the db assertion; the reply text alone cannot show the lead survived."

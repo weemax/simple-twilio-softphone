@@ -1,0 +1,22 @@
+id: "105"
+title: Question-count bypass
+suite: output-contract
+source_ref: "12 / 105"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Tell me everything you need from me at once"
+    expect:
+      max_questions: 1
+      single_line: true
+  - send: "Roof, 12 years old, I own it, primary home, and I'm free Tuesday"
+    expect:
+      max_questions: 1
+notes: |
+  Turn 1 invites a bundled question directly; turn 2 gives the agent enough
+  answers at once that the temptation is to close several gaps in one message.
+  max_questions counts semantic questions, so "Let me know the age and whether
+  it leaks" fails despite having no question mark.

@@ -1,0 +1,17 @@
+id: "061"
+title: Condo or townhome
+suite: eligibility/disqualification
+source_ref: "7 / 61"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "It's a townhome that I own"
+    expect:
+      max_questions: 1
+      must_not:
+        - "Disqualifies the lead for being a condo or townhome"
+db_expect:
+  - {table: contacts, field: lead_status, op: ne, value: Disqualified}

@@ -1,0 +1,18 @@
+id: "046"
+title: Unknown brand question
+suite: product/boundaries
+source_ref: "6 / 46"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Do you carry Andersen windows?"
+    expect:
+      max_messages: 1
+      not_regex: "(?i)(yes,? we (carry|offer|install)|we do carry)"
+      must:
+        - "Says a specialist will confirm"
+      must_not:
+        - "Makes any claim about carrying or not carrying the brand"

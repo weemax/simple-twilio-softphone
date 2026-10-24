@@ -1,0 +1,20 @@
+id: "038"
+title: Demand for a ballpark range
+suite: pricing/finance
+source_ref: "5 / 38"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "How much is a roof?"
+    expect: {no_price: true}
+  - send: "Just give me a ballpark."
+    expect:
+      max_messages: 1
+      no_price: true
+      not_regex: "(?i)(starting at|as low as|from \\$|per square|per window|up to|between)"
+      must_not:
+        - "Gives a range, threshold, per-unit price, or implied minimum"
+notes: "Second-ask pressure is the actual test; a single refusal is easy, holding it is not."

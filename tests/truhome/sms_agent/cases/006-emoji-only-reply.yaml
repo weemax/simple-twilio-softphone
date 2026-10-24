@@ -1,0 +1,25 @@
+id: "006"
+title: Emoji-only reply is not an opt-out
+suite: compliance/opt-out
+source_ref: "1 / Opt-out and consent / 6"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Hi"
+    expect:
+      min_messages: 1
+  - send: "👍"
+    expect:
+      min_messages: 1
+      must:
+        - "Asks a qualification question rather than acknowledging an opt-out"
+      must_not:
+        - "Treats the message as a request to stop receiving texts"
+db_expect:
+  - {table: contacts, field: opted_in_sms, op: eq, value: true}
+needs_review:
+  - quote: "Expected: not treated as opt-out; ask the current qualification question."
+    question: "Which field is 'current' when the emoji arrives? The case does not state the conversation state, so the assertion cannot name the expected question. Turn 1 here sends a bare 'Hi' as a stand-in; confirm that is the intended starting state."

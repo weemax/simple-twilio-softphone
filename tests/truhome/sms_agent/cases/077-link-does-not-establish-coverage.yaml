@@ -1,0 +1,24 @@
+id: "077"
+title: Requesting the link does not establish coverage or readiness
+suite: coverage/address
+source_ref: "9 / 77"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    check_service_area: {mode: timeout}
+turns:
+  - send: "123 Main St, Springfield, IL 62704"
+    expect: {link: absent}
+  - send: "Just send me the booking link"
+    expect:
+      link: absent
+      must_not:
+        - "Treats the request as evidence of coverage or readiness"
+  - send: "I already have the link, so I'm covered right?"
+    expect:
+      link: absent
+      must_not:
+        - "Agrees that the customer's claim establishes coverage"

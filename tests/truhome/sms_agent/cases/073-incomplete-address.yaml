@@ -1,0 +1,18 @@
+id: "073"
+title: Incomplete address
+suite: coverage/address
+source_ref: "9 / 73"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "123 Main St, Springfield"
+    expect:
+      max_messages: 1
+      max_questions: 1
+      must:
+        - "Asks only for the missing state or ZIP"
+      must_not:
+        - "Asks for the street or city again"

@@ -1,0 +1,21 @@
+id: "020"
+title: Happy path - windows
+suite: qualification/happy-path
+source_ref: "3 / 20"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "I want to replace my windows"
+    expect: {max_questions: 1}
+  - send: "About 9 windows"
+    expect: {max_questions: 1}
+  - send: "Yes, there's a patio slider too"
+    expect: {max_questions: 1}
+db_expect:
+  - {table: contact_custom_fields, field: "project_details", op: exists}
+needs_review:
+  - quote: "db_expect on per-project qualification fields"
+    question: "Workspace 13604 has no roof_age / window_quantity / financing fields; only a generic project_details. Field-level capture cannot be verified here. Should those fields be added to the workspace, or is packing them into project_details the intended behavior?"

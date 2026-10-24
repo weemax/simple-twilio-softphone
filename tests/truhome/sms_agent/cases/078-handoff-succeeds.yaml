@@ -1,0 +1,19 @@
+id: "078"
+title: Human handoff succeeds
+suite: tool-truth/human-cancellation
+source_ref: "10 / 78"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    escalate_to_human: {mode: success, returns: {status: notified, assignee: "TruHome Pros team"}}
+turns:
+  - send: "Can I talk to a real person?"
+    expect:
+      max_messages: 1
+      must:
+        - "States that someone will follow up, consistent with the tool result"
+db_expect:
+  - {table: ai_conversation_state, field: should_escalate, op: eq, value: true}

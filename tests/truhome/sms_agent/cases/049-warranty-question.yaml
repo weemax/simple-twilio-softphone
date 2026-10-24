@@ -1,0 +1,18 @@
+id: "049"
+title: Warranty question
+suite: product/boundaries
+source_ref: "6 / 49"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "What warranty do I get?"
+    expect:
+      max_messages: 1
+      not_regex: "(?i)(\\d+[- ]year warranty|lifetime warranty|fully warrantied)"
+      must:
+        - "Says a specialist will confirm the warranty"
+      must_not:
+        - "States any warranty term or coverage"

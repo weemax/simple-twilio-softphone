@@ -1,0 +1,24 @@
+id: "098"
+title: Timezone missing from the booking result
+suite: scheduling
+source_ref: "11 / 98"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    appointment_booked:
+      mode: success
+      returns:
+        status: confirmed
+        date: "2026-09-08"
+        time: "2:00 PM"
+turns:
+  - send: "Tuesday September 8th at 2 PM"
+    expect:
+      max_messages: 1
+      not_regex: "(?i)\\b(CST|CDT|EST|EDT|PST|PDT|MST|MDT|Central|Eastern|Pacific|Mountain)\\b"
+      must_not:
+        - "States a timezone"
+        - "Finalizes the ambiguous time"

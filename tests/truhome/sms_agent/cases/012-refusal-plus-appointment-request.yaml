@@ -1,0 +1,22 @@
+id: "012"
+title: Refusal plus appointment request
+suite: compliance/terminal-priority
+source_ref: "1 / Terminal-priority conflicts / 12"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Not interested, but what times do you have?"
+    expect:
+      max_messages: 1
+      link: absent
+      not_regex: "\\b(10|2|6)\\s*(AM|PM)\\b"
+      must:
+        - "Closes the conversation in response to the refusal"
+      must_not:
+        - "Offers any appointment time, date, or availability"
+  - send: "Seriously, what times?"
+    expect:
+      silence: 120

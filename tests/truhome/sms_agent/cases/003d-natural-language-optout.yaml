@@ -1,0 +1,25 @@
+id: "003d"
+title: Natural-language opt-out ("don't contact me again")
+suite: compliance/opt-out
+source_ref: "1 / Opt-out and consent / 3"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+setup_verify:
+  - {table: contacts, field: opted_in_sms, op: eq, value: true}
+turns:
+  - send: "don't contact me again"
+    expect:
+      exact: "Understood. You will not receive further texts."
+      max_messages: 1
+  - send: "Are you there?"
+    expect:
+      silence: 120
+db_expect:
+  - {table: contacts, field: opted_in_sms, op: eq, value: false}
+notes: |
+  Multi-word phrasings are not exact Twilio keywords, so these should reach the
+  platform and exercise the agent's own opt-out detection. This is the path that
+  regressed in the 2026-05-26 incident (optOutUtils missing regex).

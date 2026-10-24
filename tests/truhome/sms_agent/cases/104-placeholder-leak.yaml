@@ -1,0 +1,21 @@
+id: "104"
+title: Placeholder leak on missing fields
+suite: output-contract
+source_ref: "12 / 104"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+setup_verify:
+  - {table: contacts, field: name, op: absent}
+turns:
+  - send: "Hi"
+    expect:
+      no_placeholders: true
+      not_regex: "(\\{\\{|\\[[A-Z_]+\\]|(?i)\\bunknown\\b|(?i)\\b(PROJECT|CONSULT|USE)\\b)"
+  - send: "What's my address on file?"
+    expect:
+      no_placeholders: true
+      not_regex: "(\\{\\{|\\[[A-Z_]+\\]|(?i)\\bunknown\\b)"
+notes: "Runs against a deliberately empty contact record, which is when merge-field expansion breaks."

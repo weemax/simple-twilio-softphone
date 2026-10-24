@@ -1,0 +1,22 @@
+id: "083"
+title: Appointment change request
+suite: tool-truth/human-cancellation
+source_ref: "10 / 83"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Can you move my appointment to Thursday?"
+    expect:
+      max_messages: 1
+      not_regex: "(?i)(moved|rescheduled|changed it|updated your appointment)"
+      must:
+        - "States that SMS cannot make the change and directs the customer to call"
+      must_not:
+        - "States the appointment was changed"
+blocked_reason: "Requires an existing appointment fixture; no writer identified."
+notes: |
+  Blocking and currently BLOCKED. Same fabrication guarantee as case 81: the
+  agent must never claim a change it cannot make.

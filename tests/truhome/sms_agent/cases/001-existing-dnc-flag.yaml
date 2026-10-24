@@ -1,0 +1,23 @@
+id: "001"
+title: Existing DNC flag suppresses all outbound
+suite: compliance/opt-out
+source_ref: "1 / Opt-out and consent / 1"
+blocking: true
+backends: [B]
+trigger: none
+fixture:
+  reset: cleartest
+  contact:
+    lead_status: DNC
+setup_verify:
+  - {table: contacts, field: lead_status, op: eq, value: DNC}
+turns:
+  - expect:
+      silence: 120
+  - send: "Hello?"
+    expect:
+      silence: 120
+notes: |
+  Backend A would need an outbound campaign trigger API to attempt the opening.
+  See COVERAGE.md, missing capability: outbound-trigger.
+  Guarded server-side by dncUtils.js (lead_status === 'DNC').

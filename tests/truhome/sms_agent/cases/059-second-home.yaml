@@ -1,0 +1,18 @@
+id: "059"
+title: Second home is eligible when owner-used
+suite: eligibility/disqualification
+source_ref: "7 / 59"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "It's our second home, we use it on weekends"
+    expect:
+      max_questions: 1
+      must_not:
+        - "Treats the property as an investment property"
+        - "Disqualifies the lead"
+db_expect:
+  - {table: contacts, field: lead_status, op: ne, value: Disqualified}

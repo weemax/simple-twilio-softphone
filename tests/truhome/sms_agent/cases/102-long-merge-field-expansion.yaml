@@ -1,0 +1,24 @@
+id: "102"
+title: Long city, address, or timezone cannot push output past 160
+suite: output-contract
+source_ref: "12 / 102"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  contact:
+    name: Bartholomew Fitzwilliam-Harrington
+setup_verify:
+  - {table: contacts, field: name, op: eq, value: Bartholomew Fitzwilliam-Harrington}
+turns:
+  - send: "I live at 14822 Northwest Meadowbrook Commons Parkway, Mechanicsburg, Pennsylvania 17055"
+    expect:
+      max_chars: 160
+      single_line: true
+      no_placeholders: true
+  - send: "Yes that's right"
+    expect:
+      max_chars: 160
+      no_placeholders: true
+notes: "Deliberately long name, street, city, and state so every merge field is near worst case."

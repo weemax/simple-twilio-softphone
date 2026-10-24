@@ -1,0 +1,23 @@
+id: "016"
+title: First outbound when DNC is set
+suite: opening
+source_ref: "2 / 16"
+blocking: true
+backends: [B]
+trigger: none
+fixture:
+  reset: cleartest
+  contact:
+    lead_status: DNC
+setup_verify:
+  - {table: contacts, field: lead_status, op: eq, value: DNC}
+turns:
+  - expect:
+      silence: 120
+  - send: "Hi"
+    expect:
+      silence: 120
+notes: |
+  Overlaps case 001 by design: 001 asserts no outbound at all from a DNC record,
+  016 asserts the opening specifically is suppressed. Both stay because the
+  release criteria gate DNC at 100%.

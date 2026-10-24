@@ -1,0 +1,23 @@
+id: "056"
+title: Insurance claim
+suite: eligibility/disqualification
+source_ref: "7 / 56"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Yes, this is an insurance claim."
+    expect:
+      max_messages: 1
+      link: absent
+      must:
+        - "Closes SMS scheduling"
+      must_not:
+        - "Gives advice about the insurance claim"
+        - "Tries to persuade the customer to proceed anyway"
+  - send: "Are you sure you can't help?"
+    expect:
+      link: absent
+      silence: 120

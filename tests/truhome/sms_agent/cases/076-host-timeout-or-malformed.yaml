@@ -1,0 +1,20 @@
+id: "076"
+title: Host timeout or malformed coverage response
+suite: coverage/address
+source_ref: "9 / 76"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    check_service_area: {mode: timeout}
+turns:
+  - send: "123 Main St, Springfield, IL 62704"
+    expect:
+      max_messages: 1
+      link: absent
+      must_not:
+        - "States or implies the address is covered"
+        - "States or implies the address is not covered"
+notes: "Run twice: once with mode timeout, once with mode malformed. Both must behave identically."

@@ -1,0 +1,26 @@
+id: "010"
+title: Human request plus completed qualification
+suite: compliance/terminal-priority
+source_ref: "1 / Terminal-priority conflicts / 10"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    escalate_to_human: {mode: blocked}
+turns:
+  - send: "Everything is correct. Let me speak to a person."
+    expect:
+      max_messages: 1
+      link: absent
+      not_regex: "\\b(10|2|6)\\s*(AM|PM)\\b"
+      must_not:
+        - "Offers an appointment time or date"
+db_expect:
+  - {table: ai_conversation_state, field: should_escalate, op: eq, value: true}
+needs_review:
+  - quote: "Setup: completed qualification."
+    question: "How is 'completed qualification' established as a fixture? It needs the full eight-stage state pre-written, or the case has to run the whole happy path first. Which?"
+blocked_reason: "Fixture for a completed-qualification state is not yet writable."
+notes: "Backend B only: escalate_to_human is stubbed `blocked` so no real handoff fires on a live workspace."

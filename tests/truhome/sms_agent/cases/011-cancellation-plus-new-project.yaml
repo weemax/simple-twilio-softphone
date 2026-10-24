@@ -1,0 +1,23 @@
+id: "011"
+title: Cancellation plus new project interest
+suite: compliance/terminal-priority
+source_ref: "1 / Terminal-priority conflicts / 11"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Cancel tomorrow. I may also need windows."
+    expect:
+      max_messages: 1
+      link: absent
+      must:
+        - "Gives cancellation instructions"
+      must_not:
+        - "Asks any question about windows"
+        - "States the appointment is canceled"
+db_expect:
+  - {table: contact_custom_fields, field: "project_details", op: unchanged}
+blocked_reason: "Requires an existing appointment fixture; no writer identified yet."
+notes: "Never confirm a cancellation over SMS (see case 81)."

@@ -1,0 +1,32 @@
+id: "002"
+title: Explicit STOP
+suite: compliance/opt-out
+source_ref: "1 / Opt-out and consent / 2"
+blocking: true
+backends: [A, B]
+trigger: inbound
+poisons_number: true
+fixture:
+  reset: cleartest
+setup_verify:
+  - {table: contacts, field: opted_in_sms, op: eq, value: true}
+turns:
+  - send: "STOP"
+    expect:
+      exact: "Understood. You will not receive further texts."
+      max_messages: 1
+  - send: "Hello?"
+    expect:
+      silence: 120
+db_expect:
+  - {table: contacts, field: opted_in_sms, op: eq, value: false}
+teardown:
+  - send: "START"
+  - wait: 30
+  - send: "CLEARTEST"
+  - verify: {table: contacts, field: opted_in_sms, op: eq, value: true}
+notes: |
+  On backend A the exact keyword STOP is intercepted by Twilio before the
+  platform sees it. Running this on A tests the carrier layer; the `exact`
+  assertion may therefore reflect Twilio's canned reply, not the agent's.
+  Confirm which layer owns the acknowledgment before trusting an A result.

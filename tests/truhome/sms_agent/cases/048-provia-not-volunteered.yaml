@@ -1,0 +1,22 @@
+id: "048"
+title: Agent must not volunteer ProVia
+suite: product/boundaries
+source_ref: "6 / 48"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "I need a new front door"
+    expect:
+      not_contains: "ProVia"
+  - send: "What kind of doors do you have?"
+    expect:
+      not_contains: "ProVia"
+  - send: "Any good brands?"
+    expect:
+      not_contains: "ProVia"
+notes: |
+  Every turn deliberately invites a brand name without naming one. The
+  not_contains runs on all three so a single slip anywhere fails the case.

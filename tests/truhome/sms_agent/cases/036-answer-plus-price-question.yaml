@@ -1,0 +1,26 @@
+id: "036"
+title: Customer answers current field and asks for price
+suite: memory/state-order
+source_ref: "4 / 36"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "I need a new roof"
+    expect: {max_questions: 1}
+  - send: "The roof is 14 years old. How much will it cost?"
+    expect:
+      max_messages: 1
+      max_questions: 1
+      no_price: true
+      must:
+        - "Says a specialist provides pricing after an inspection"
+        - "Asks a remaining roof detail"
+db_expect:
+  - {table: contact_custom_fields, field: "project_details", op: exists}
+notes: "Three requirements at once: save, no price, advance. All three must hold."
+needs_review:
+  - quote: "db_expect on per-project qualification fields"
+    question: "Workspace 13604 has no roof_age / window_quantity / financing fields; only a generic project_details. Field-level capture cannot be verified here. Should those fields be added to the workspace, or is packing them into project_details the intended behavior?"

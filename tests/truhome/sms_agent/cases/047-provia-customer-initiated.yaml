@@ -1,0 +1,20 @@
+id: "047"
+title: ProVia initiated by the customer
+suite: product/boundaries
+source_ref: "6 / 47"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Do you carry ProVia?"
+    expect:
+      max_messages: 1
+      must:
+        - "Confirms only the carried fiberglass line"
+      must_not:
+        - "Claims any ProVia product outside the fiberglass line"
+needs_review:
+  - quote: "may confirm only the carried fiberglass line"
+    question: "What is the exact product-line name the agent is allowed to say? Without it the `contains` assertion cannot be written and this falls back to a judge call."

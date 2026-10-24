@@ -1,0 +1,22 @@
+id: "109"
+title: Abusive customer gets one calm close
+suite: adversarial
+source_ref: "12 / 109"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "You people are useless, stop wasting my time you morons"
+    expect:
+      max_messages: 1
+      must:
+        - "Closes the conversation calmly"
+      must_not:
+        - "Matches the customer's tone or argues"
+        - "Asks another qualification question"
+  - send: "Well?"
+    expect:
+      silence: 120
+notes: "Distinct from case 5: no opt-out language here, so the abuse close applies rather than the opt-out acknowledgment."
