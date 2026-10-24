@@ -7,14 +7,23 @@
 // tunnel-shaped proxy (loopback connection, public Host, the X-Forwarded-*
 // headers ngrok documents) in front of the real server and check that only
 // Twilio's webhooks get through, while the app's own brokers still work.
+//
+// TWP-8: anyone holding the tunnel URL could also post unsigned webhooks
+// and forge inbound SMS, delivery updates and calls. Through the same
+// tunnel, the webhooks now need Twilio's signature over the exact public
+// URL and every parameter; the requests here are signed the way Twilio
+// documents (checked against Twilio's own worked example below).
 // Fake credentials and fictional data only; nothing here reaches Twilio.
 
+const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
 
 const PUBLIC_HOST = 'fictional-softphone.ngrok-free.app';
+const PUBLIC_BASE_URL = `https://${PUBLIC_HOST}`;
+const AUTH_TOKEN = 'fictional-auth-token-for-tests-0001';
 const FICTIONAL_NUMBER = '+15555550123';
 
 const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'operator-private-'));
@@ -28,6 +37,10 @@ const ENV = {
   TWILIO_TWIML_APP_SID: 'AP00000000000000000000000000000000',
   TWILIO_CALLER_ID: '+15555550100',
   OPERATOR_IDENTITY: 'operator',
+  TWILIO_AUTH_TOKEN: AUTH_TOKEN,
+  PUBLIC_BASE_URL,
+  SMS_PUBLIC_BASE_URL: undefined,
+  SMS_STATUS_CALLBACK_URL: undefined,
   SMS_STORE_PATH: storePath,
   OPERATOR_LOCAL_API_KEY_FILE: keyPath,
   TOKEN_BACKEND_URL: undefined,
@@ -126,7 +139,93 @@ function storedMessages() {
   return JSON.parse(fs.readFileSync(storePath, 'utf8'));
 }
 
+// X-Twilio-Signature as Twilio's security docs describe it, written here
+// rather than taken from the server's SDK: the full URL (query string
+// included), then each POST parameter's name and value sorted by name,
+// HMAC-SHA1 keyed with the Auth Token, base64.
+function twilioSignature(url, params = {}, authToken = AUTH_TOKEN) {
+  const data = Object.keys(params)
+    .sort()
+    .reduce((acc, name) => acc + name + params[name], url);
+  return crypto.createHmac('sha1', authToken).update(Buffer.from(data, 'utf8')).digest('base64');
+}
+
+// A webhook POST through the tunnel. `signedFor` is the URL, and `signed`
+// the parameters, the signature covers; by default exactly what is sent.
+function postWebhook(p, params, { signedFor = PUBLIC_BASE_URL + p, signed = params, signature } = {}) {
+  return request(tunnelPort, {
+    method: 'POST',
+    path: p,
+    headers: {
+      ...form,
+      'X-Twilio-Signature': signature === undefined ? twilioSignature(signedFor, signed) : signature,
+    },
+    body: new URLSearchParams(params).toString(),
+  });
+}
+
+function unsignedPost(p, params) {
+  return request(tunnelPort, {
+    method: 'POST',
+    path: p,
+    headers: form,
+    body: new URLSearchParams(params).toString(),
+  });
+}
+
+// The parameters Twilio sends with each webhook (fictional values).
+const INBOUND_SMS = {
+  ToCountry: 'US',
+  ToState: 'CA',
+  SmsMessageSid: 'SM00000000000000000000000000000002',
+  NumMedia: '0',
+  ToCity: 'SAN FRANCISCO',
+  FromZip: '94105',
+  SmsSid: 'SM00000000000000000000000000000002',
+  FromState: 'CA',
+  SmsStatus: 'received',
+  FromCity: 'SAN FRANCISCO',
+  Body: 'Running ten minutes late.',
+  FromCountry: 'US',
+  To: '+15555550100',
+  ToZip: '94105',
+  NumSegments: '1',
+  MessageSid: 'SM00000000000000000000000000000002',
+  AccountSid: ENV.TWILIO_ACCOUNT_SID,
+  From: '+15555550199',
+  ApiVersion: '2010-04-01',
+};
+const DELIVERY_STATUS = {
+  SmsSid: 'SM00000000000000000000000000000001',
+  SmsStatus: 'delivered',
+  MessageStatus: 'delivered',
+  To: FICTIONAL_NUMBER,
+  MessageSid: 'SM00000000000000000000000000000001',
+  AccountSid: ENV.TWILIO_ACCOUNT_SID,
+  From: '+15555550100',
+  ApiVersion: '2010-04-01',
+};
+const INBOUND_CALL = {
+  AccountSid: ENV.TWILIO_ACCOUNT_SID,
+  ApiVersion: '2010-04-01',
+  CallSid: 'CA00000000000000000000000000000001',
+  CallStatus: 'ringing',
+  Called: '+15555550100',
+  CalledCountry: 'US',
+  Caller: '+15555550199',
+  CallerCountry: 'US',
+  Direction: 'inbound',
+  From: '+15555550199',
+  FromCountry: 'US',
+  To: '+15555550100',
+  ToCountry: 'US',
+};
+
+// The server logs why it refused each webhook.
+let warn;
+
 beforeAll(async () => {
+  warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
   server = await startServer({ port: 0, host: '127.0.0.1' });
   port = server.address().port;
   tunnel = await startTunnel(port);
@@ -145,6 +244,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  warn.mockRestore();
   for (const s of [tunnel, server]) {
     if (!s) continue;
     s.closeAllConnections();
@@ -199,53 +299,18 @@ describe('through a tunnel', () => {
     expect(res.status).toBe(403);
   });
 
-  it('keeps serving the voice webhook to inbound calls', async () => {
-    const res = await request(tunnelPort, {
-      method: 'POST',
-      path: '/twiml',
-      headers: form,
-      body: new URLSearchParams({
-        AccountSid: ENV.TWILIO_ACCOUNT_SID,
-        CallSid: 'CA00000000000000000000000000000001',
-        From: '+15555550199',
-        To: '+15555550100',
-        Direction: 'inbound',
-        CallStatus: 'ringing',
-      }).toString(),
-    });
+  it('keeps serving the voice webhook to inbound calls Twilio signed', async () => {
+    const res = await postWebhook('/twiml', INBOUND_CALL);
 
     expect(res.status).toBe(200);
     expect(res.body).toContain('<Client>operator</Client>');
   });
 
-  it('keeps accepting inbound SMS and delivery status webhooks', async () => {
-    const inbound = await request(tunnelPort, {
-      method: 'POST',
-      path: '/sms/inbound',
-      headers: form,
-      body: new URLSearchParams({
-        AccountSid: ENV.TWILIO_ACCOUNT_SID,
-        MessageSid: 'SM00000000000000000000000000000002',
-        SmsSid: 'SM00000000000000000000000000000002',
-        SmsStatus: 'received',
-        From: '+15555550199',
-        To: '+15555550100',
-        Body: 'Running ten minutes late.',
-        NumMedia: '0',
-        NumSegments: '1',
-      }).toString(),
-    });
-    const status = await request(tunnelPort, {
-      method: 'POST',
-      path: '/sms/status',
-      headers: form,
-      body: new URLSearchParams({
-        AccountSid: ENV.TWILIO_ACCOUNT_SID,
-        MessageSid: 'SM00000000000000000000000000000001',
-        MessageStatus: 'delivered',
-        SmsStatus: 'delivered',
-      }).toString(),
-    });
+  // The server reads only a few of these parameters; the signature covers
+  // them all, so the check passes only if every one is included.
+  it('keeps accepting inbound SMS and delivery status webhooks Twilio signed', async () => {
+    const inbound = await postWebhook('/sms/inbound', INBOUND_SMS);
+    const status = await postWebhook('/sms/status', DELIVERY_STATUS);
     const health = await request(tunnelPort, { path: '/health' });
 
     expect(inbound.status).toBe(200);
@@ -254,7 +319,171 @@ describe('through a tunnel', () => {
     );
     expect(status.status).toBe(200);
     expect(JSON.parse(status.body).updated).toBe(true);
+    expect(storedMessages()[FICTIONAL_NUMBER].messages[0].status).toBe('delivered');
     expect(health.status).toBe(200);
+  });
+});
+
+describe('Twilio webhook signatures through a tunnel', () => {
+  it("signs test requests exactly like Twilio's documented example", () => {
+    // https://www.twilio.com/docs/usage/security#validating-requests
+    const signature = twilioSignature(
+      'https://example.com/myapp.php?foo=1&bar=2',
+      {
+        CallSid: 'CA1234567890ABCDE',
+        Caller: '+14158675310',
+        Digits: '1234',
+        From: '+14158675310',
+        To: '+18005551212',
+      },
+      '12345'
+    );
+
+    expect(signature).toBe('L/OH5YylLD5NRKLltdqwSvS0BnU=');
+  });
+
+  it('refuses unsigned inbound SMS, delivery updates and calls', async () => {
+    const before = storedMessages();
+    const forgedSms = { ...INBOUND_SMS, From: FICTIONAL_NUMBER, Body: 'This is your bank. Reply with your PIN.' };
+
+    const results = [
+      await unsignedPost('/sms/inbound', forgedSms),
+      await unsignedPost('/sms/status', { ...DELIVERY_STATUS, MessageStatus: 'failed', SmsStatus: 'failed' }),
+      await unsignedPost('/twiml', INBOUND_CALL),
+      await unsignedPost('/', INBOUND_CALL),
+    ];
+
+    expect(results.map((r) => r.status)).toEqual([403, 403, 403, 403]);
+    for (const r of results) expect(r.body).not.toContain('<Dial');
+    expect(storedMessages()).toEqual(before);
+  });
+
+  it('refuses a signature made with another Auth Token', async () => {
+    const before = storedMessages();
+
+    const res = await postWebhook('/sms/inbound', INBOUND_SMS, {
+      signature: twilioSignature(PUBLIC_BASE_URL + '/sms/inbound', INBOUND_SMS, 'some-other-auth-token'),
+    });
+
+    expect(res.status).toBe(403);
+    expect(storedMessages()).toEqual(before);
+  });
+
+  it('refuses a signature for any URL other than the exact public one', async () => {
+    const before = storedMessages();
+
+    const results = [
+      // The URL this server itself sees behind the tunnel.
+      await postWebhook('/sms/inbound', INBOUND_SMS, { signedFor: 'http://127.0.0.1:5050/sms/inbound' }),
+      await postWebhook('/sms/inbound', INBOUND_SMS, { signedFor: `http://${PUBLIC_HOST}/sms/inbound` }),
+      await postWebhook('/sms/inbound', INBOUND_SMS, {
+        signedFor: 'https://another-softphone.ngrok-free.app/sms/inbound',
+      }),
+      // A genuine delivery-update signature replayed on another webhook.
+      await postWebhook('/sms/inbound', DELIVERY_STATUS, { signedFor: PUBLIC_BASE_URL + '/sms/status' }),
+    ];
+
+    expect(results.map((r) => r.status)).toEqual([403, 403, 403, 403]);
+    expect(storedMessages()).toEqual(before);
+  });
+
+  it('refuses a signed request whose parameters were added, dropped or changed', async () => {
+    const before = storedMessages();
+    const { ToCity, ...withoutToCity } = INBOUND_SMS;
+
+    const results = [
+      await postWebhook('/sms/inbound', { ...INBOUND_SMS, Body: 'Send the code to this number.' }, { signed: INBOUND_SMS }),
+      await postWebhook('/sms/inbound', { ...INBOUND_SMS, From: FICTIONAL_NUMBER }, { signed: INBOUND_SMS }),
+      await postWebhook('/sms/inbound', { ...INBOUND_SMS, NumMedia: '1', MediaUrl0: 'https://example.com/a.jpg' }, { signed: INBOUND_SMS }),
+      await postWebhook('/sms/inbound', withoutToCity, { signed: INBOUND_SMS }),
+      await postWebhook('/sms/status', { ...DELIVERY_STATUS, MessageStatus: 'failed' }, { signed: DELIVERY_STATUS }),
+    ];
+
+    expect(results.map((r) => r.status)).toEqual([403, 403, 403, 403, 403]);
+    expect(storedMessages()).toEqual(before);
+  });
+
+  // HANDOFF §3: the TwiML App's Voice URL may use GET.
+  it('accepts a signed voice webhook sent with GET', async () => {
+    const p = `/twiml?${new URLSearchParams(INBOUND_CALL)}`;
+
+    const signed = await request(tunnelPort, {
+      path: p,
+      headers: { 'X-Twilio-Signature': twilioSignature(PUBLIC_BASE_URL + p) },
+    });
+    const unsigned = await request(tunnelPort, { path: p });
+
+    expect(signed.status).toBe(200);
+    expect(signed.body).toContain('<Client>operator</Client>');
+    expect(unsigned.status).toBe(403);
+  });
+
+  // HANDOFF §3: a Voice URL may be the bare tunnel address, which Twilio
+  // signs exactly as it is written in the console.
+  it('accepts a signed voice webhook at the tunnel root, with or without the slash', async () => {
+    const withSlash = await postWebhook('/', INBOUND_CALL, { signedFor: PUBLIC_BASE_URL + '/' });
+    const bare = await postWebhook('/', INBOUND_CALL, { signedFor: PUBLIC_BASE_URL });
+
+    expect([withSlash.status, bare.status]).toEqual([200, 200]);
+    expect(bare.body).toContain('<Client>operator</Client>');
+  });
+});
+
+describe('Twilio webhooks without the signature settings', () => {
+  // A second copy of the server with its own store and key file, started
+  // without TWILIO_AUTH_TOKEN: it must refuse webhooks, not skip the check.
+  const unconfiguredStore = path.join(workDir, 'unconfigured-sms-store.json');
+  let unconfigured;
+  let unconfiguredTunnel;
+  const saved = {};
+
+  beforeAll(async () => {
+    for (const k of ['TWILIO_AUTH_TOKEN', 'SMS_STORE_PATH', 'OPERATOR_LOCAL_API_KEY_FILE']) {
+      saved[k] = process.env[k];
+    }
+    delete process.env.TWILIO_AUTH_TOKEN;
+    process.env.SMS_STORE_PATH = unconfiguredStore;
+    process.env.OPERATOR_LOCAL_API_KEY_FILE = path.join(workDir, 'unconfigured-local-api-key');
+    let isolated;
+    jest.isolateModules(() => {
+      isolated = require('../server/server');
+    });
+    unconfigured = await isolated.startServer({ port: 0, host: '127.0.0.1' });
+    unconfiguredTunnel = await startTunnel(unconfigured.address().port);
+  });
+
+  afterAll(async () => {
+    for (const s of [unconfiguredTunnel, unconfigured]) {
+      if (!s) continue;
+      s.closeAllConnections();
+      await new Promise((r) => s.close(r));
+    }
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it('refuses every webhook, signed or not', async () => {
+    const port = unconfiguredTunnel.address().port;
+    const post = (p, params, signature) =>
+      request(port, {
+        method: 'POST',
+        path: p,
+        headers: { ...form, ...(signature ? { 'X-Twilio-Signature': signature } : {}) },
+        body: new URLSearchParams(params).toString(),
+      });
+
+    const results = [
+      await post('/sms/inbound', INBOUND_SMS),
+      await post('/sms/inbound', INBOUND_SMS, twilioSignature(PUBLIC_BASE_URL + '/sms/inbound', INBOUND_SMS)),
+      await post('/sms/status', DELIVERY_STATUS, twilioSignature(PUBLIC_BASE_URL + '/sms/status', DELIVERY_STATUS)),
+      await post('/twiml', INBOUND_CALL, twilioSignature(PUBLIC_BASE_URL + '/twiml', INBOUND_CALL)),
+    ];
+
+    expect(results.map((r) => r.status)).toEqual([503, 503, 503, 503]);
+    expect(fs.existsSync(unconfiguredStore)).toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('TWILIO_AUTH_TOKEN is not set'));
   });
 });
 

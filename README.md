@@ -19,16 +19,16 @@ This project is a fork of Kevin Whinnery's abandoned [operator](https://github.c
 | Electron app boots (dev + prod) | working |
 | Voice: device registration + outbound PSTN dial | working, **requires TwiML App outbound Caller ID set in console** (see `HANDOFF.md` §8a) |
 | Voice: in-call UI (mute, hangup, DTMF keypad) | working |
-| Voice: inbound call routing + Answer/Decline UI | implemented, **requires `OPERATOR_IDENTITY` set in `server/.env`** (see `server/README.md`); not exercised against a real inbound number |
+| Voice: inbound call routing + Answer/Decline UI | implemented, **requires `OPERATOR_IDENTITY` set in `server/.env`** (see `server/README.md`) and the webhook signature settings below; not exercised against a real inbound number |
 | Voice: Operator-to-Operator (Client-to-Client) | server-side `<Dial><Client>` path is implemented, untested end-to-end |
 | SMS: outbound send (composer → Twilio) | working |
-| SMS: inbound webhook (Twilio → server → UI) | working |
+| SMS: inbound webhook (Twilio → server → UI) | working, **requires the webhook signature settings below** |
 | SMS: inbound notification (native OS alert + sound) | working |
-| SMS: delivery status badges (queued → sent → delivered / failed) | working, **requires `SMS_STATUS_CALLBACK_URL` set in `server/.env`** (see `HANDOFF.md` §3c) |
+| SMS: delivery status badges (queued → sent → delivered / failed) | working, **requires `PUBLIC_BASE_URL` set in `server/.env`** (see `HANDOFF.md` §3c) |
 | SMS: read receipts, typing indicators, MMS, group threads, search | not implemented (out of scope) |
 | Phone number management UI | not implemented (planned) |
 | Private routes (`/token`, `/sms/send`, `/sms/conversations`) closed to the tunnel | working — tunneled requests get 403; the app's main process uses a per-start local API key |
-| Inbound webhook signature verification | not implemented (v1 trusts the tunnel URL) |
+| Twilio webhook signature verification (`/twiml`, `/sms/inbound`, `/sms/status`) | working — requests without a valid Twilio signature over the exact public URL get 403; **requires `TWILIO_AUTH_TOKEN` and `PUBLIC_BASE_URL` in `server/.env`**, without which every webhook is refused (see `server/README.md`) |
 | Production distribution (electron-builder installers) | not implemented |
 
 For the full handoff doc with file map, IPC contract, call flow, environment variables, and console setup walkthroughs, see [`HANDOFF.md`](./HANDOFF.md).
@@ -62,7 +62,14 @@ For Twilio to reach your local webhook endpoints (both `/twiml` for voice and `/
 ngrok http --domain=YOUR-RESERVED-DOMAIN.ngrok-free.app 5050
 ```
 
-Then configure the URLs in the Twilio console — full walkthroughs in `HANDOFF.md` §3 (voice) and §3b/§3c (SMS). Only the webhook paths and `/health` answer through the tunnel; the private routes refuse tunneled requests.
+Put the tunnel's address and your Auth Token in `server/.env`, then restart the token server:
+
+```env
+PUBLIC_BASE_URL=https://YOUR-RESERVED-DOMAIN.ngrok-free.app
+TWILIO_AUTH_TOKEN=your_auth_token_here
+```
+
+Then configure the URLs in the Twilio console, starting with exactly that address — full walkthroughs in `HANDOFF.md` §3 (voice) and §3b/§3c (SMS). Only the webhook paths and `/health` answer through the tunnel; the private routes refuse tunneled requests, and the webhooks refuse any request Twilio did not sign.
 
 ## Production-mode test
 
@@ -105,16 +112,16 @@ ELECTRON_IS_DEV=0 npm start
         ┌────────────────────────┐
         │ server/server.js       │  127.0.0.1:5050
         │  /token                │  private (local API key)
-        │  /twiml                │  public via ngrok
+        │  /twiml                │  public, Twilio-signed
         │  /sms/send             │  private (local API key)
         │  /sms/conversations    │  private (local API key)
-        │  /sms/inbound          │  public via ngrok
-        │  /sms/status           │  public via ngrok
+        │  /sms/inbound          │  public, Twilio-signed
+        │  /sms/status           │  public, Twilio-signed
         │  /health               │  public
         └────────────────────────┘
 ```
 
-Renderer is sandboxed — Auth Token / API Secret never cross the IPC boundary, only signed JWTs and result data. The local server answers only its public routes — the webhooks `/twiml` (and `/`), `/sms/inbound` and `/sms/status`, plus `/health` — through the unguessable ngrok URL. Because the tunnel itself connects from 127.0.0.1, every other route is private: it refuses requests that carry tunnel/proxy forwarding headers or a public `Host`, and requires the local API key the server writes to `server/.local-api-key` on each start, which only the Electron main process reads. That key also stops a web page in your browser from posting to `127.0.0.1:5050`.
+Renderer is sandboxed — Auth Token / API Secret never cross the IPC boundary, only signed JWTs and result data. The local server answers only its public routes — the webhooks `/twiml` (and `/`), `/sms/inbound` and `/sms/status`, plus `/health` — through the ngrok URL, and the webhooks only for requests carrying Twilio's signature, which the server checks with the account's Auth Token against `PUBLIC_BASE_URL` and every request parameter. Because the tunnel itself connects from 127.0.0.1, every other route is private: it refuses requests that carry tunnel/proxy forwarding headers or a public `Host`, and requires the local API key the server writes to `server/.local-api-key` on each start, which only the Electron main process reads. That key also stops a web page in your browser from posting to `127.0.0.1:5050`.
 
 ## License
 
