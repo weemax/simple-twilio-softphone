@@ -335,6 +335,55 @@ describe('Connect', () => {
     expect(chosen.voice_url).toBe('https://a-different-place.example/voice');
   });
 
+  // TWP-26 approved implementation: a created app whose response is lost is
+  // found by installation ownership on Retry instead of creating a duplicate.
+  test('reuses the owned app when Twilio creates it but the response is lost', async () => {
+    const chosen = fake.addNumber();
+    const key = fake.addKey('A key already in server/.env');
+    const installId = '0123abcd';
+    const { setup, env } = makeSetup({
+      envText: `TWILIO_ACCOUNT_SID=${fake.accountSid}\nTWILIO_AUTH_TOKEN=${fake.authToken}\nTWILIO_API_KEY=${key.sid}\nTWILIO_API_SECRET=${key.secret}\nOPERATOR_INSTALL_ID=${installId}\n`,
+    });
+    fake.dropNextResponse('POST', /Applications\.json$/);
+
+    const interrupted = await setup.connect(connectInput(chosen.sid));
+    expect(interrupted).toMatchObject({ ok: false, failedStep: 'app' });
+    expect(operatorApps()).toHaveLength(1);
+    expect(operatorApps()[0].friendly_name).toBe(ownedName(installId));
+
+    const retried = await setup.connect(connectInput(chosen.sid));
+    expect(retried.ok).toBe(true);
+    expect(operatorApps()).toHaveLength(1);
+    expect(retried.status.connection).toMatchObject({
+      voiceUrl: `${PUBLIC}/twiml`,
+      voiceUrlVerified: true,
+    });
+    expect(env().TWILIO_TWIML_APP_SID).toBe(operatorApps()[0].sid);
+  });
+
+  // TWP-26 approved implementation: a shadowed app SID must not make
+  // Connect appear successful while outgoing calls would use another app.
+  test('refuses success when the environment overrides the saved owned app SID', async () => {
+    const chosen = fake.addNumber();
+    const foreign = fake.addApp({ friendly_name: 'Hand-made', voice_url: 'https://foreign.example/twiml' });
+    const { setup, reopen } = makeSetup({ launchEnv: { TWILIO_TWIML_APP_SID: foreign.sid } });
+
+    const blocked = await setup.connect(connectInput(chosen.sid));
+    expect(blocked).toMatchObject({ ok: false, failedStep: 'app' });
+    expect(blocked.error).toMatch(/TWILIO_TWIML_APP_SID is set in the environment/);
+    expect(setup.status().connection.voiceUrlVerified).toBe(false);
+    expect(chosen.voice_application_sid).toBe('');
+    expect(foreign.voice_url).toBe('https://foreign.example/twiml');
+    expect(operatorApps()).toHaveLength(1);
+
+    const retried = await reopen({}).connect(connectInput(chosen.sid));
+    expect(retried.ok).toBe(true);
+    expect(operatorApps()).toHaveLength(1);
+    expect(chosen.voice_application_sid).toBe(operatorApps()[0].sid);
+    expect(retried.status.connection.voiceUrlVerified).toBe(true);
+    expect(foreign.voice_url).toBe('https://foreign.example/twiml');
+  });
+
   test('names the step that failed and Retry resumes without creating a second key or app', async () => {
     const chosen = fake.addNumber();
     const { setup, env } = makeSetup();
@@ -507,12 +556,49 @@ describe('repair on launch', () => {
 
   // TWP-23: the Connection view shows the Voice URL Operator's own application
   // has, from the reads and writes setup already makes.
-  test('the Voice URL on Operator’s application is blank until Connect, then follows the address on each repair', async () => {
+  // TWP-26 approved implementation: status is marked verified only after a
+  // read-back observes the current Operator-owned Voice URL.
+  test('the Voice URL is blank before Connect, then verified and current after each repair', async () => {
     const { reopen } = await connected();
     expect(makeSetup().setup.status().connection.voiceUrl).toBeNull();
-    expect(reopen().status().connection.voiceUrl).toBe(`${PUBLIC}/twiml`);
+    expect(reopen().status().connection).toMatchObject({
+      voiceUrl: `${PUBLIC}/twiml`,
+      voiceUrlVerified: true,
+      voiceUrlCheckedAt: expect.any(Number),
+    });
     await reopen({ PUBLIC_BASE_URL: NEXT_PUBLIC }).repair();
-    expect(reopen({ PUBLIC_BASE_URL: NEXT_PUBLIC }).status().connection.voiceUrl).toBe(`${NEXT_PUBLIC}/twiml`);
+    expect(reopen({ PUBLIC_BASE_URL: NEXT_PUBLIC }).status().connection).toMatchObject({
+      voiceUrl: `${NEXT_PUBLIC}/twiml`,
+      voiceUrlVerified: true,
+      voiceUrlCheckedAt: expect.any(Number),
+    });
+  });
+
+  // TWP-26 approved implementation: a successful API write alone must not
+  // produce a current status when the app still reports its old Voice URL.
+  test('does not report an unconfirmed URL as current and safely repairs it on retry', async () => {
+    const { reopen, env } = await connected();
+    const appSid = env().TWILIO_TWIML_APP_SID;
+    fake.ignoreNextVoiceUrlUpdate();
+
+    const failed = await reopen({ PUBLIC_BASE_URL: NEXT_PUBLIC }).repair();
+    expect(failed).toMatchObject({ ok: false, result: 'error' });
+    const stale = reopen({ PUBLIC_BASE_URL: NEXT_PUBLIC }).status().connection;
+    expect(stale).toMatchObject({
+      voiceUrl: `${PUBLIC}/twiml`,
+      voiceUrlVerified: false,
+      account: { state: 'error' },
+    });
+    expect(env().TWILIO_TWIML_APP_SID).toBe(appSid);
+    expect(operatorApps()).toHaveLength(1);
+
+    const retried = await reopen({ PUBLIC_BASE_URL: NEXT_PUBLIC }).repair();
+    expect(retried.ok).toBe(true);
+    expect(reopen({ PUBLIC_BASE_URL: NEXT_PUBLIC }).status().connection).toMatchObject({
+      voiceUrl: `${NEXT_PUBLIC}/twiml`,
+      voiceUrlVerified: true,
+    });
+    expect(operatorApps()).toHaveLength(1);
   });
 
   // TWP-23: a fixed address that does not change means a launch writes nothing to Twilio.

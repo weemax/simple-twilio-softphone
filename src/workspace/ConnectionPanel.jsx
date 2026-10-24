@@ -109,9 +109,18 @@ function routeSummary(route, noun) {
 // The Voice URL on Operator's own TwiML App, as the last check or Connect saw
 // it (server/setup.js), against this session's tunnel. Blank until Connect has
 // run. The path is server/setup.js VOICE_PATH.
-export function voiceUrlSummary(voiceUrl, status) {
-  if (!voiceUrl) return 'Not set yet. Open Twilio account and connect to create Operator’s TwiML App.';
+export function voiceUrlSummary(voiceUrl, status, voiceUrlVerified, voiceUrlCheckedAt) {
   const tunnelUrl = status && status.tunnel && status.tunnel.url;
+  if (voiceUrlVerified === false) {
+    const retry = 'Retry Connect or choose Check connection now in Twilio account.';
+    if (!voiceUrl) return `The TwiML App Voice URL was not verified. ${retry}`;
+    const observed = voiceUrlCheckedAt ? `Last observed ${new Date(voiceUrlCheckedAt).toLocaleString()}: ` : 'Last observed: ';
+    const reason = tunnelUrl
+      ? 'Operator could not verify this as the active Voice URL for this session.'
+      : 'Operator could not verify this Voice URL on the last check.';
+    return `${observed}${voiceUrl}. ${reason} ${retry}`;
+  }
+  if (!voiceUrl) return 'Not set yet. Open Twilio account and connect to create Operator’s TwiML App.';
   if (!tunnelUrl) return `${voiceUrl}. No tunnel address this session to compare it with.`;
   const expected = `${tunnelUrl}/twiml`;
   if (voiceUrl === expected) return `${voiceUrl} matches this session’s address.`;
@@ -151,7 +160,7 @@ export function ConnectionPanel({ status, voice, sms, setup }) {
             : 'No public address: delivery updates for texts you send will not arrive.'}
         </dd>
         <dt>Voice URL</dt>
-        <dd>{voiceUrlSummary(conn.voiceUrl, status)}</dd>
+        <dd>{voiceUrlSummary(conn.voiceUrl, status, conn.voiceUrlVerified, conn.voiceUrlCheckedAt)}</dd>
         <dt>Message updates</dt>
         <dd>
           {sms.lastError ||
