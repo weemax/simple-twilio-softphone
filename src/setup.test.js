@@ -113,6 +113,15 @@ describe('Check account', () => {
     expect(result.ok).toBe(true);
   });
 
+  test('checking another account does not mark the saved connection as checked', async () => {
+    fake.addNumber();
+    const { setup, reopen } = makeSetup({
+      envText: `TWILIO_ACCOUNT_SID=AC${'2'.repeat(32)}\nTWILIO_AUTH_TOKEN=a-saved-token-nobody-checked\n`,
+    });
+    expect((await setup.check(account())).ok).toBe(true); // a different account, typed in
+    expect(reopen().status().connection.account.state).toBe('unchecked');
+  });
+
   test('asks for what is missing in plain words before contacting Twilio', async () => {
     const { setup } = makeSetup();
     await expect(setup.check({ accountSid: 'nope', authToken: 'x' })).rejects.toThrow(/Account SID/);
@@ -173,6 +182,14 @@ describe('Review', () => {
     expect(sms.notes.join(' ')).toMatch(/Messaging Service "Fictional campaign"/);
     expect(sms.notes.join(' ')).toMatch(/never edits Messaging Services/);
     expect(fake.writes()).toEqual([]);
+  });
+
+  test('says when it cannot tell whether a Messaging Service holds the number, instead of claiming none does', async () => {
+    const number = fake.addNumber();
+    fake.state.moreServices = true; // more services than one page: the answer would be incomplete
+    const { setup } = makeSetup();
+    const review = await setup.review(connectInput(number.sid));
+    expect(review.rows.find((r) => r.id === 'sms').notes.join(' ')).toMatch(/could not check whether this number is in a Messaging Service/);
   });
 
   test('requires a public address, an identity and an existing number', async () => {
@@ -419,6 +436,33 @@ describe('Connect', () => {
     expect(result.warnings.join(' ')).toMatch(/OPERATOR_IDENTITY is also set in the environment/);
   });
 
+  test('a public address from the environment or server/.env must meet the same rules as a typed one', async () => {
+    const chosen = fake.addNumber();
+    for (const bad of ['http://my-host.example', `${PUBLIC}/prefix`]) {
+      const { setup } = makeSetup({ launchEnv: { PUBLIC_BASE_URL: bad } });
+      await expect(setup.connect({ ...connectInput(chosen.sid), publicBaseUrl: '' })).rejects.toThrow(/must be an https address with no path/);
+    }
+    const { setup } = makeSetup({ envText: `PUBLIC_BASE_URL=${PUBLIC}/prefix\n` });
+    await expect(setup.review({ ...connectInput(chosen.sid), publicBaseUrl: '' })).rejects.toThrow(/from server\/\.env/);
+    expect(fake.writes()).toEqual([]);
+  });
+
+  test('a rejected key that the environment overrides stops before creating a key that could never be used', async () => {
+    const chosen = fake.addNumber();
+    const { setup } = makeSetup({ launchEnv: { TWILIO_API_KEY: 'SK' + '9'.repeat(32), TWILIO_API_SECRET: 'stale' } });
+    const result = await setup.connect(connectInput(chosen.sid));
+    expect(result).toMatchObject({ ok: false, failedStep: 'key' });
+    expect(result.error).toMatch(/TWILIO_API_KEY and TWILIO_API_SECRET are set in the environment/);
+    expect(fake.state.keys).toEqual([]);
+  });
+
+  test('a number released after review is reported as gone, not as a failed step', async () => {
+    const result = await makeSetup().setup.connect(connectInput('PN' + 'e'.repeat(32)));
+    expect(result).toMatchObject({ ok: false, kind: 'number-gone' });
+    expect(result.steps).toBeUndefined();
+    expect(fake.writes()).toEqual([]);
+  });
+
   test('refuses a second Connect while one is running', async () => {
     const chosen = fake.addNumber();
     const { setup } = makeSetup();
@@ -522,6 +566,12 @@ describe('repair on launch', () => {
 });
 
 describe('Connection facts', () => {
+  test('a state file without capabilities does not break status', async () => {
+    const { setup, statePath } = makeSetup();
+    fs.writeFileSync(statePath, JSON.stringify({ number: { sid: 'PN' + 'a'.repeat(32), e164: '+15555550101' } }));
+    expect(setup.status().connection.mms).toBe('unknown');
+  });
+
   test('status reports presence of secrets, the connected number, routes, callback and photo capability, never a value', async () => {
     const chosen = fake.addNumber({ phone_number: '+15555550101', capabilities: { voice: true, sms: true, mms: false } });
     const { setup } = makeSetup();

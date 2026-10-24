@@ -195,7 +195,10 @@ function registerIpc() {
   ]) {
     ipcMain.handle(channel, async (_e, input) => {
       try {
-        return await call(input);
+        const answer = await call(input);
+        // A new key or application invalidates tokens already signed.
+        if (channel === 'setup:connect' || channel === 'setup:repair') tokenBroker.invalidateCache();
+        return answer;
       } catch (err) {
         return { ok: false, kind: 'service', error: err.message };
       }

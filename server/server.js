@@ -953,6 +953,7 @@ function startRepair() {
     .then((r) => {
       if (r.result === 'ok') {
         console.log(`[setup] account check: ok${r.changes.length ? ' — ' + r.changes.join(' ') : ''}`);
+        for (const w of r.warnings || []) console.warn(`[setup] ${w}`);
       } else if (r.result !== 'not-set-up' && r.result !== 'unavailable') {
         console.warn(`[setup] account check: ${r.result} — ${r.error}`);
       }

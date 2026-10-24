@@ -127,4 +127,11 @@ async function fetchToken(identity) {
   return { token: result.token, identity, cached: false };
 }
 
-module.exports = { fetchToken, canMintDirectly };
+// Forget the cached token. Setup calls this after it replaces the API key or
+// the TwiML Application, so the next registration signs with the new ones
+// instead of reusing a token the old ones issued.
+function invalidateCache() {
+  cached = null;
+}
+
+module.exports = { fetchToken, canMintDirectly, invalidateCache };

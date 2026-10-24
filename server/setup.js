@@ -133,12 +133,27 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
     return { accountSid, authToken };
   }
 
+  // A public address saved in server/.env or supplied by the environment must
+  // meet the same rules as one typed here, or Twilio would be sent webhook
+  // addresses the service cannot answer.
+  function savedPublicUrl(cfg) {
+    if (!cfg.publicBaseUrl) return null;
+    const url = normalizePublicUrl(cfg.publicBaseUrl);
+    if (!url) {
+      throw new SetupError(
+        `The public address ${cfg.publicBaseUrl} (from ${cfg.publicBaseUrlSource === 'environment' ? 'the environment' : 'server/.env'}) must be an https address with no path, such as https://your-name.ngrok-free.app.`,
+        { kind: 'bad-public-url' }
+      );
+    }
+    return url;
+  }
+
   // The tunnel's address when `npm run phone` supplied one (the environment
   // wins), else the person's entry, else the saved one.
   function publicUrlFor(input = {}) {
     const cfg = config.get();
     if (cfg.publicBaseUrl && cfg.publicBaseUrlSource === 'environment') {
-      return { url: cfg.publicBaseUrl, source: 'environment' };
+      return { url: savedPublicUrl(cfg), source: 'environment' };
     }
     const typed = String(input.publicBaseUrl || '').trim();
     if (typed) {
@@ -151,7 +166,7 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
       }
       return { url, source: 'input' };
     }
-    if (cfg.publicBaseUrl) return { url: cfg.publicBaseUrl, source: 'file' };
+    if (cfg.publicBaseUrl) return { url: savedPublicUrl(cfg), source: 'file' };
     return null;
   }
 
@@ -226,8 +241,9 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
     } catch (err) {
       return failedCheck(err);
     }
-    recordCheck('ok');
     const cfg = config.get();
+    // Only a check of the saved account says anything about the saved connection.
+    if (creds.accountSid === cfg.accountSid && creds.authToken === cfg.authToken) recordCheck('ok');
     return {
       ok: true,
       account: { sid: creds.accountSid },
@@ -296,6 +312,15 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
   async function ensureKey(creds, installId, warnings) {
     const state = await keyState(creds);
     if (state === 'valid') return { action: 'unchanged', detail: 'The saved API key works.' };
+    // A key from the environment this app started with wins over server/.env,
+    // so a replacement saved there would never be used: stop before creating one.
+    const shadowedKey = config.shadowed(['TWILIO_API_KEY', 'TWILIO_API_SECRET']);
+    if (shadowedKey.length) {
+      throw new SetupError(
+        `${shadowedKey.join(' and ')} ${shadowedKey.length === 1 ? 'is' : 'are'} set in the environment this app was started with, which wins over server/.env, and Twilio does not accept that key. Remove ${shadowedKey.length === 1 ? 'it' : 'them'} from the environment, then Retry.`,
+        { status: 409, kind: 'shadowed' }
+      );
+    }
     const api = apiWith(creds);
     const cfg = config.get();
     const oldKey = cfg.apiKey;
@@ -632,7 +657,12 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
     try {
       number = await api.getNumber(numberSid);
     } catch (err) {
-      return fail('key', err);
+      // Before anything was changed: report it like Review does, with no step marked failed.
+      if (err instanceof TwilioError && err.kind === 'not-found') {
+        return { ok: false, kind: 'number-gone', error: 'That number is no longer on this account. Check the account again.' };
+      }
+      if (err instanceof TwilioError) return failedCheck(err);
+      throw err;
     }
 
     // The install id names everything created below, so it is saved before
@@ -766,7 +796,7 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
     try {
       const k = await ensureKey(creds, cfg.installId, warnings);
       if (k.action !== 'unchanged') changes.push(k.detail);
-      const pub = config.get().publicBaseUrl;
+      const pub = savedPublicUrl(config.get());
       let app;
       if (pub) {
         const a = await ensureApp(creds, cfg.installId, pub, warnings);
@@ -793,7 +823,7 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
           ['sms', 'SmsApplicationSid'],
         ]) {
           const route = describeRoute(number, id, current, pub, stale);
-          if (route.state === 'stale' && app && state.number.capabilities[id]) {
+          if (route.state === 'stale' && app && ((state.number.capabilities || {})[id])) {
             await api.updateNumber(number.sid, { [field]: app.sid });
             connection[id] = { state: 'operator', description: 'Operator' };
             changes.push(`Pointed incoming ${id === 'voice' ? 'calls' : 'texts'} at the new Operator application.`);
@@ -833,11 +863,8 @@ function createSetup({ config, statePath, env = process.env, now = Date.now, ret
     const cfg = config.get();
     const state = readState();
     const connection = state.connection || {};
-    const mms = state.number
-      ? state.number.capabilities.mms
-        ? 'yes'
-        : 'no'
-      : 'unknown';
+    const caps = (state.number && state.number.capabilities) || null;
+    const mms = caps ? (caps.mms ? 'yes' : 'no') : 'unknown';
     return {
       available: available(),
       credentials: Boolean(cfg.accountSid && cfg.apiKey && cfg.apiSecret && cfg.twimlAppSid),

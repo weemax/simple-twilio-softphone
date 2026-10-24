@@ -210,11 +210,15 @@ function createApi({ accountSid, authToken, apiKey, apiSecret, env = process.env
     // The Messaging Service, if any, that holds this number. Best effort and
     // read only: a Messaging Service's own inbound setting overrides the
     // number's. Resolves { service: { sid, friendlyName } | null } or
-    // { unknown: reason }.
+    // { unknown: reason } when the answer could not be complete (an error,
+    // more services or members than were read, or too slow).
     async messagingServiceFor(numberSid) {
+      const deadline = Date.now() + 20000;
       try {
         const services = await call('GET', '/v1/Services?PageSize=50', null, bases.messaging);
+        let complete = !(services && services.meta && services.meta.next_page_url);
         for (const s of (services && services.services) || []) {
+          if (Date.now() > deadline) return { unknown: 'slow' };
           const members = await call(
             'GET',
             `/v1/Services/${encodeURIComponent(s.sid)}/PhoneNumbers?PageSize=100`,
@@ -224,8 +228,9 @@ function createApi({ accountSid, authToken, apiKey, apiSecret, env = process.env
           if (((members && members.phone_numbers) || []).some((m) => m.sid === numberSid)) {
             return { service: { sid: s.sid, friendlyName: s.friendly_name || '' } };
           }
+          if (members && members.meta && members.meta.next_page_url) complete = false;
         }
-        return { service: null };
+        return complete ? { service: null } : { unknown: 'incomplete' };
       } catch (err) {
         return { unknown: err.kind || 'error' };
       }

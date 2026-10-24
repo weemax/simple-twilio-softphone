@@ -112,12 +112,12 @@ function startFakeTwilio({ accountSid = ACCOUNT_SID, authToken = AUTH_TOKEN } = 
     const p = url.pathname;
     let m;
     if ((m = /^\/messaging\/v1\/Services$/.exec(p)) && method === 'GET') {
-      return send(res, 200, { services: state.services.map((s) => ({ sid: s.sid, friendly_name: s.friendly_name })) });
+      return send(res, 200, { services: state.services.map((s) => ({ sid: s.sid, friendly_name: s.friendly_name })), meta: { next_page_url: state.moreServices ? 'next' : null } });
     }
     if ((m = /^\/messaging\/v1\/Services\/(MG[0-9a-f]+)\/PhoneNumbers$/.exec(p)) && method === 'GET') {
       const s = state.services.find((x) => x.sid === m[1]);
       if (!s) return missing(res);
-      return send(res, 200, { phone_numbers: s.numberSids.map((sid) => ({ sid })) });
+      return send(res, 200, { phone_numbers: s.numberSids.map((sid) => ({ sid })), meta: { next_page_url: s.moreNumbers ? 'next' : null } });
     }
     const base = `/2010-04-01/Accounts/${accountSid}`;
     if (!p.startsWith(base)) return missing(res);

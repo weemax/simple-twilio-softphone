@@ -7,6 +7,7 @@ const http = require('http');
 const https = require('https');
 const net = require('net');
 const path = require('path');
+const { parseEnvText } = require('../server/envFile');
 
 // The settings the service needs to sign tokens and send texts. Without them
 // it still starts, and the app opens on Settings → Twilio account, whose
@@ -60,22 +61,9 @@ function electronExecutable(projectDir) {
   }
 }
 
-function parseEnvFile(text) {
-  // The same format dotenv reads: KEY=value, # comments, optional quotes.
-  const out = {};
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
-    if (!m) continue;
-    let value = m[2].trim();
-    const quoted = /^(['"`])(.*)\1$/.exec(value);
-    if (quoted) value = quoted[2];
-    else value = value.replace(/\s+#.*$/, '');
-    out[m[1]] = value;
-  }
-  return out;
-}
+// The same parser the service reads server/.env with (server/envFile.js), so the
+// launcher and the service cannot disagree about what the file says.
+const parseEnvFile = parseEnvText;
 
 // The service's settings as server/server.js will see them: server/.env,
 // with anything already in the environment taking precedence (dotenv never
