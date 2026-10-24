@@ -5,13 +5,22 @@
 //
 // Only the routes in PUBLIC_ROUTES (Twilio's webhooks and /health) may be
 // reached through a tunnel. Every other route is private: see
-// checkPrivateAccess for what a request must show to reach one.
+// checkPrivateAccess for what a request must show to reach one. Twilio's
+// webhooks must also carry a valid Twilio signature: see
+// checkTwilioSignature.
 //
 // Required env (set in `server/.env` or the parent shell):
 //   TWILIO_ACCOUNT_SID     — starts with AC…
 //   TWILIO_API_KEY         — starts with SK…
 //   TWILIO_API_SECRET      — the secret shown when the API Key was created
 //   TWILIO_TWIML_APP_SID   — a Voice TwiML App SID (starts with AP…)
+//
+// Required for Twilio's webhooks (/twiml, /sms/inbound, /sms/status), which
+// are refused without them:
+//   TWILIO_AUTH_TOKEN      — the account's primary Auth Token; Twilio signs
+//                            every webhook request with it
+//   PUBLIC_BASE_URL        — the public address Twilio calls, e.g.
+//                            https://YOUR-DOMAIN.ngrok-free.app
 
 if (require.main === module) {
   require('dotenv').config({ path: require('path').join(__dirname, '.env') });
@@ -24,6 +33,7 @@ if (require.main === module) {
 // main posts to this server's /token, this server signs the JWT and returns
 // it. The auth token is never sent over the wire.
 
+const crypto = require('crypto');
 const http = require('http');
 const path = require('path');
 const twilio = require('twilio');
@@ -51,7 +61,28 @@ const {
   // form → "Client Identity"). Required for inbound calls; without it,
   // `/twiml` falls back to a generic message and Twilio hangs up.
   OPERATOR_IDENTITY,
+  // Only used to check Twilio's webhook signatures. Tokens and SMS sends
+  // keep using the API key above.
+  TWILIO_AUTH_TOKEN,
 } = process.env;
+
+// The public base URL Twilio calls this server on (the tunnel's address,
+// no trailing slash), or null when unset or not an http(s) URL. Twilio
+// signs the exact URL it requested, and behind a tunnel this server only
+// sees the local one, so the public address has to come from config.
+// SMS_PUBLIC_BASE_URL is the older name for the same setting.
+function resolvePublicBaseUrl() {
+  const raw = process.env.PUBLIC_BASE_URL || process.env.SMS_PUBLIC_BASE_URL;
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+  } catch (_) {
+    return null;
+  }
+  return raw.replace(/\/+$/, '');
+}
+const PUBLIC_BASE_URL = resolvePublicBaseUrl();
 
 // SMS persistence lives next to the token server so the renderer and the
 // webhook can both read it. Override with SMS_STORE_PATH for tests.
@@ -67,9 +98,7 @@ function getStatusCallbackUrl() {
   if (SMS_STATUS_CALLBACK_URL) return SMS_STATUS_CALLBACK_URL;
   // Default to the same host as the inbound webhook: rely on the env to
   // provide a public base, or fail closed (don't register a callback).
-  if (process.env.SMS_PUBLIC_BASE_URL) {
-    return process.env.SMS_PUBLIC_BASE_URL.replace(/\/+$/, '') + '/sms/status';
-  }
+  if (PUBLIC_BASE_URL) return PUBLIC_BASE_URL + '/sms/status';
   return null; // not configured — handleSmsSend will skip statusCallback
 }
 
@@ -94,6 +123,32 @@ function requireEnv() {
         'with 31005. Add a verified Twilio number to server/.env.'
     );
   }
+  if (
+    PUBLIC_BASE_URL &&
+    SMS_STATUS_CALLBACK_URL &&
+    !SMS_STATUS_CALLBACK_URL.startsWith(PUBLIC_BASE_URL + '/sms/status')
+  ) {
+    console.warn(
+      `[token-server] SMS_STATUS_CALLBACK_URL is not ${PUBLIC_BASE_URL}/sms/status — ` +
+        'delivery updates sent there will fail the signature check. ' +
+        'Remove it to use PUBLIC_BASE_URL.'
+    );
+  }
+}
+
+// Why Twilio's webhooks cannot be checked, or null when they can.
+function webhookConfigProblem() {
+  const missing = [];
+  if (!TWILIO_AUTH_TOKEN) missing.push('TWILIO_AUTH_TOKEN is not set');
+  if (!PUBLIC_BASE_URL) {
+    const raw = process.env.PUBLIC_BASE_URL || process.env.SMS_PUBLIC_BASE_URL;
+    missing.push(
+      raw
+        ? `the public base URL "${raw}" is not an http(s) URL`
+        : 'PUBLIC_BASE_URL is not set'
+    );
+  }
+  return missing.length ? missing.join(' and ') : null;
 }
 
 function readBody(req) {
@@ -125,17 +180,20 @@ function send(res, status, body) {
   res.end(text);
 }
 
-// The only routes a tunnel may reach: Twilio's webhooks plus /health for
-// checking the tunnel itself. Their responses carry no secrets or history.
-// Any route not listed here is private, so a new route stays off the
-// tunnel unless it is added on purpose.
-const PUBLIC_ROUTES = new Set([
-  '/health',
+// Twilio's webhooks. Each request must carry a valid Twilio signature
+// (checkTwilioSignature) before it is handled.
+const TWILIO_WEBHOOK_ROUTES = new Set([
   '/twiml',
   '/',
   '/sms/inbound',
   '/sms/status',
 ]);
+
+// The only routes a tunnel may reach: Twilio's webhooks plus /health for
+// checking the tunnel itself. Their responses carry no secrets or history.
+// Any route not listed here is private, so a new route stays off the
+// tunnel unless it is added on purpose.
+const PUBLIC_ROUTES = new Set(['/health', ...TWILIO_WEBHOOK_ROUTES]);
 
 // Set by startServer(). Until then every private request is refused.
 let localApiKey = null;
@@ -200,10 +258,66 @@ function checkPrivateAccess(req) {
   return null;
 }
 
+// Whether `presented` is Twilio's signature for this request: the public
+// URL it was sent to (PUBLIC_BASE_URL + `reqUrl`, the path and query string
+// this server received) and every POST parameter in `form`.
+function signatureValidFor(presented, reqUrl, form) {
+  try {
+    // The SDK also tries the URL with and without the default port, which
+    // Twilio keeps for SMS and drops for HTTPS voice.
+    if (twilio.validateRequest(TWILIO_AUTH_TOKEN, presented, PUBLIC_BASE_URL + reqUrl, form)) {
+      return true;
+    }
+    // The SDK parses the URL, which adds a "/" to a bare host. A Voice URL
+    // set to the tunnel address with no path is signed without it.
+    if (reqUrl !== '/' && !reqUrl.startsWith('/?')) return false;
+    const bareUrl = PUBLIC_BASE_URL + reqUrl.slice(1);
+    const expected = Buffer.from(
+      twilio.getExpectedTwilioSignature(TWILIO_AUTH_TOKEN, bareUrl, form)
+    );
+    const given = Buffer.from(presented);
+    return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+  } catch (_) {
+    return false; // an unparseable URL is never a valid signature
+  }
+}
+
+// Twilio signs every webhook request: X-Twilio-Signature is the base64
+// HMAC-SHA1, keyed with the account's Auth Token, of the exact URL Twilio
+// requested (scheme, host, path and query string) followed by every POST
+// parameter, sorted by name. Checking it against PUBLIC_BASE_URL and the
+// whole body refuses a forged request, one signed for another URL (such as
+// the local one this server sees), and one with any parameter added,
+// dropped or changed. Unknown parameters stay in: Twilio adds new ones
+// without notice. Returns null when the signature is valid, or the
+// { status, error, log } to answer with; until TWILIO_AUTH_TOKEN and
+// PUBLIC_BASE_URL are both set, every webhook is refused.
+function checkTwilioSignature(req, form) {
+  const problem = webhookConfigProblem();
+  if (problem) {
+    return { status: 503, error: 'webhook signature check not configured', log: problem };
+  }
+  // Logged without the query string, which carries call details on GET.
+  const publicUrl = PUBLIC_BASE_URL + req.url.split('?')[0];
+  const presented = req.headers['x-twilio-signature'];
+  if (!presented) {
+    return { status: 403, error: 'missing Twilio signature', log: `no X-Twilio-Signature (${publicUrl})` };
+  }
+  if (signatureValidFor(presented, req.url, form)) return null;
+  return {
+    status: 403,
+    error: 'invalid Twilio signature',
+    log:
+      `X-Twilio-Signature does not match ${publicUrl} — check that ` +
+      'TWILIO_AUTH_TOKEN is the primary Auth Token and that the Twilio ' +
+      'console uses this exact URL',
+  };
+}
+
 const server = http.createServer(async (req, res) => {
-  // Public routes: Twilio must reach these from the internet. Auth on them
-  // is "knowing the ngrok/tunnel URL" — the URL is unguessable, and we never
-  // put secrets in their responses.
+  // Public routes: Twilio must reach these from the internet. Twilio's
+  // webhooks need a valid Twilio signature; /health answers anyone. We
+  // never put secrets in their responses.
   // Private routes (/token, /sms/send, /sms/conversations): only the
   // Operator app on this machine. /token returns auth-signed JWTs.
   const url = (req.url || '').split('?')[0];
@@ -211,6 +325,10 @@ const server = http.createServer(async (req, res) => {
   if (!PUBLIC_ROUTES.has(url)) {
     const denied = checkPrivateAccess(req);
     if (denied) return send(res, denied.status, { error: denied.error });
+  }
+
+  if (TWILIO_WEBHOOK_ROUTES.has(url)) {
+    return handleTwilioWebhook(req, res, url);
   }
 
   if (req.method === 'GET' && url === '/health') {
@@ -222,15 +340,6 @@ const server = http.createServer(async (req, res) => {
       return send(res, 405, { error: 'method not allowed' });
     }
     return handleToken(req, res);
-  }
-
-  if (url === '/twiml' || url === '/') {
-    // Both /twiml and the bare root return TwiML, so a TwiML App pointed
-    // at the tunnel root still works. /health stays the only probe path.
-    if (req.method !== 'GET' && req.method !== 'POST') {
-      return send(res, 405, { error: 'method not allowed' });
-    }
-    return handleTwiml(req, res);
   }
 
   if (url === '/sms/send') {
@@ -247,26 +356,49 @@ const server = http.createServer(async (req, res) => {
     return handleSmsList(req, res);
   }
 
-  if (url === '/sms/inbound') {
-    // Public — Twilio's webhook must reach this without auth. See
-    // handleSmsInbound for the v1 trust model.
-    if (req.method !== 'GET' && req.method !== 'POST') {
-      return send(res, 405, { error: 'method not allowed' });
-    }
-    return handleSmsInbound(req, res);
-  }
-
-  if (url === '/sms/status') {
-    // Public — Twilio's per-message status callback. Same trust model
-    // as /sms/inbound.
-    if (req.method !== 'GET' && req.method !== 'POST') {
-      return send(res, 405, { error: 'method not allowed' });
-    }
-    return handleSmsStatus(req, res);
-  }
-
   return send(res, 404, { error: 'not found' });
 });
+
+// Read the webhook's form body, check Twilio's signature over it, then hand
+// the request's parameters (query string and body) to the route's handler.
+async function handleTwilioWebhook(req, res, url) {
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return send(res, 405, { error: 'method not allowed' });
+  }
+
+  let form = {};
+  if (req.method === 'POST') {
+    try {
+      form = await readFormBody(req);
+    } catch (err) {
+      return send(res, 400, { error: err.message });
+    }
+  }
+
+  const denied = checkTwilioSignature(req, form);
+  if (denied) {
+    console.warn(`[webhook] refused ${req.method} ${url}: ${denied.log}`);
+    return send(res, denied.status, { error: denied.error });
+  }
+
+  // Twilio never repeats a parameter on these webhooks; if one is repeated,
+  // the last value wins, as before signatures were checked.
+  const params = {};
+  new URL(req.url, 'http://localhost').searchParams.forEach((v, k) => {
+    params[k] = v;
+  });
+  for (const [k, v] of Object.entries(form)) {
+    params[k] = Array.isArray(v) ? v[v.length - 1] : v;
+  }
+
+  if (url === '/twiml' || url === '/') {
+    // Both /twiml and the bare root return TwiML, so a TwiML App pointed
+    // at the tunnel root still works. /health stays the only probe path.
+    return renderTwiml(params, res);
+  }
+  if (url === '/sms/inbound') return handleSmsInbound(params, res);
+  return handleSmsStatus(params, res);
+}
 
 async function handleToken(req, res) {
   let body;
@@ -319,8 +451,10 @@ async function handleToken(req, res) {
 
 // TwiML response for both outbound calls placed by the Operator client and
 // inbound calls to the Twilio number. Twilio POSTs to this URL with
-// form-encoded params (or GETs with query string); direction is told apart
-// by `From` (see the isFromClient check in renderTwiml below).
+// form-encoded params (or GETs with query string), which
+// handleTwilioWebhook has already signature-checked and merged into
+// `params`; direction is told apart by `From` (see the isFromClient check
+// below).
 //
 // Routing rules (outbound only; inbound always dials OPERATOR_IDENTITY):
 //   - If `To` looks like a Client identity (matches the safe identifier
@@ -330,11 +464,6 @@ async function handleToken(req, res) {
 //   - Otherwise 400 with an error TwiML so Twilio reads the message.
 //
 // The VoiceResponse helper escapes user input safely.
-async function handleTwiml(req, res) {
-  const params = await parseQueryAndBody(req);
-  return renderTwiml(params, res);
-}
-
 function renderTwiml(params, res) {
   const to = (params.To || '').toString().trim();
   const from = (params.From || '').toString().trim();
@@ -402,37 +531,6 @@ function renderTwiml(params, res) {
   return sendTwiml(res, response);
 }
 
-function parseQueryAndBody(req) {
-  // Combine query string and (form-encoded) body into one object.
-  return new Promise((resolve, reject) => {
-    const out = {};
-    try {
-      const u = new URL(req.url, 'http://localhost');
-      u.searchParams.forEach((v, k) => (out[k] = v));
-    } catch (_) {}
-    // Drain body for POSTs. Most Twilio webhooks are GET, but some are POST.
-    if (req.method === 'POST') {
-      const chunks = [];
-      req.on('data', (c) => chunks.push(c));
-      req.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        if (text) {
-          try {
-            const sp = new URLSearchParams(text);
-            sp.forEach((v, k) => (out[k] = v));
-          } catch (e) {
-            return reject(e);
-          }
-        }
-        resolve(out);
-      });
-      req.on('error', reject);
-    } else {
-      resolve(out);
-    }
-  });
-}
-
 function sendTwiml(res, response) {
   const xml = response.toString();
   res.writeHead(200, {
@@ -472,24 +570,30 @@ function readJsonBody(req, maxBytes = 64 * 1024) {
   });
 }
 
-// Twilio's inbound webhook posts application/x-www-form-urlencoded.
-// Reuse the same parser logic as handleTwiml but inline so we don't
-// have to refactor that path.
-function readFormBody(req) {
+// Twilio's webhooks POST application/x-www-form-urlencoded. Every
+// parameter is kept, a repeated one as an array of its values, because
+// Twilio's signature covers all of them. The body is read before the
+// signature can be checked, so its size is capped.
+function readFormBody(req, maxBytes = 64 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', (c) => chunks.push(c));
+    let total = 0;
+    req.on('data', (c) => {
+      total += c.length;
+      if (total > maxBytes) {
+        reject(new Error('body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
     req.on('end', () => {
       const text = Buffer.concat(chunks).toString('utf8');
-      const out = {};
-      if (text) {
-        try {
-          const sp = new URLSearchParams(text);
-          sp.forEach((v, k) => (out[k] = v));
-        } catch (e) {
-          return reject(e);
-        }
-      }
+      const out = Object.create(null);
+      new URLSearchParams(text).forEach((v, k) => {
+        if (!(k in out)) out[k] = v;
+        else out[k] = [].concat(out[k], v);
+      });
       resolve(out);
     });
     req.on('error', reject);
@@ -588,20 +692,10 @@ async function handleSmsSend(req, res) {
   }
 }
 
-async function handleSmsInbound(req, res) {
-  // Public endpoint — anyone who knows the ngrok URL can POST here, but
-  // Twilio's webhook signature is the proper auth. For v1 we accept any
-  // well-formed Twilio form body; signature verification is a v2 item.
-  let params;
-  try {
-    params = await readFormBody(req);
-  } catch (err) {
-    // Twilio expects TwiML even on error so it doesn't retry forever.
-    res.writeHead(400, { 'Content-Type': 'text/xml; charset=utf-8' });
-    res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Say>Invalid request.</Say></Response>');
-    return;
-  }
-
+// Twilio's incoming-message webhook. Public, but handleTwilioWebhook has
+// already refused anything without a valid Twilio signature, so `params`
+// is what Twilio sent.
+async function handleSmsInbound(params, res) {
   const from = normalizeNumber(params.From);
   const body = typeof params.Body === 'string' ? params.Body : '';
   const sid = params.MessageSid || params.SmsSid || null;
@@ -638,17 +732,12 @@ async function handleSmsInbound(req, res) {
 // aliases). See:
 //   https://www.twilio.com/docs/messaging/api/message-resource#message-status-values
 //
-// We look up the message by SID in the store and update its status. The
-// renderer's 3s poll picks up the new status on the next cycle. No TwiML
-// response expected — Twilio just records the HTTP 2xx.
-async function handleSmsStatus(req, res) {
-  let params;
-  try {
-    params = await readFormBody(req);
-  } catch (_) {
-    return send(res, 400, { ok: false, error: 'invalid form body' });
-  }
-
+// Like the other webhooks, it reaches this handler only with a valid
+// Twilio signature (handleTwilioWebhook). We look up the message by SID in
+// the store and update its status. The renderer's 3s poll picks up the new
+// status on the next cycle. No TwiML response expected — Twilio just
+// records the HTTP 2xx.
+async function handleSmsStatus(params, res) {
   const sid = params.MessageSid || params.SmsSid || null;
   const status = (
     params.MessageStatus ||
@@ -735,10 +824,17 @@ if (require.main === module) {
     } else {
       console.log(
         '[token-server] sms status callback: NOT CONFIGURED ' +
-          '(set SMS_PUBLIC_BASE_URL or SMS_STATUS_CALLBACK_URL — ' +
+          '(set PUBLIC_BASE_URL or SMS_STATUS_CALLBACK_URL — ' +
           'outbound status will stay at queued/sent)'
       );
     }
+    const webhookProblem = webhookConfigProblem();
+    console.log(
+      webhookProblem
+        ? `[token-server] twilio webhook signatures: NOT CONFIGURED (${webhookProblem}) — ` +
+            'inbound calls, inbound SMS and delivery updates are refused; see server/README.md'
+        : `[token-server] twilio webhook signatures: required, checked against ${PUBLIC_BASE_URL}`
+    );
   }, (err) => {
     console.error(
       `[token-server] could not start on http://${HOST}:${PORT}: ${err.message}`

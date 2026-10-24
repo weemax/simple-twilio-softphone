@@ -2,10 +2,10 @@
 
 **Project:** Twilio-powered desktop soft phone (Electron + React)
 **Location:** `/Users/izzy/Projects/WebWolf/twilio-phone`
-**Status:** Voice soft phone end-to-end (UI + Twilio Voice + WebRTC Device + Token broker). SMS chat feature shipped 2026-06-10 — server endpoints, IPC bridge, renderer service, and chat panel UI. Inbound calls now route to the softphone with an Answer/Decline UI, and outbound/inbound Dials preserve ringback via `answerOnBridge` (see §6a). Inbound SMS now also triggers a native OS notification + bundled sound (see §10a). Outbound PSTN calls require the TwiML App's outbound Caller ID to be set in console (see §8a); inbound calls require `OPERATOR_IDENTITY` set in `server/.env` (see §13); SMS requires the inbound webhook URL to be set on a Twilio number (see §3b).
-**Recent updates:** Inbound PSTN ringing wired (2026-07-19, see §15). API-key rotation recovery documented (2026-07-19, see §16).
+**Status:** Voice soft phone end-to-end (UI + Twilio Voice + WebRTC Device + Token broker). SMS chat feature shipped 2026-06-10 — server endpoints, IPC bridge, renderer service, and chat panel UI. Inbound calls now route to the softphone with an Answer/Decline UI, and outbound/inbound Dials preserve ringback via `answerOnBridge` (see §6a). Inbound SMS now also triggers a native OS notification + bundled sound (see §10a). Outbound PSTN calls require the TwiML App's outbound Caller ID to be set in console (see §8a); inbound calls require `OPERATOR_IDENTITY` set in `server/.env` (see §13); SMS requires the inbound webhook URL to be set on a Twilio number (see §3b). Every Twilio webhook must carry a valid Twilio signature, which needs `TWILIO_AUTH_TOKEN` and `PUBLIC_BASE_URL` in `server/.env` (see §3).
+**Recent updates:** Inbound PSTN ringing wired (2026-07-19, see §15). API-key rotation recovery documented (2026-07-19, see §16). Twilio webhook signatures checked on `/twiml`, `/sms/inbound` and `/sms/status` (2026-10-24, see §3).
 **Original Author:** Kevin Whinnery (forked from kwhinnery/operator, abandoned)
-**Last Updated:** 2026-07-28
+**Last Updated:** 2026-10-24
 
 ---
 
@@ -41,6 +41,8 @@ cd ..
 - `TWILIO_API_KEY` — create one in API keys & tokens
 - `TWILIO_API_SECRET` — shown once when you create the API key
 - `TWILIO_TWIML_APP_SID` — Voice → TwiML Apps → copy SID
+- `TWILIO_AUTH_TOKEN` — Account → API keys & tokens → Auth Token (primary); used only to check Twilio's webhook signatures
+- `PUBLIC_BASE_URL` — your tunnel's address, e.g. `https://YOUR-DOMAIN.ngrok-free.app` (see §3)
 
 ### Each session
 
@@ -81,9 +83,17 @@ The reserved dev domain (free, no endpoint hours) must be set up first at https:
 
 Copy the printed `https://…ngrok-free.app` URL and:
 
-1. In console.twilio.com → Voice → TwiML Apps → your app → set **Voice URL** to `https://YOUR-DOMAIN.ngrok-free.app/twiml`
-2. HTTP method: GET or POST (server handles both)
-3. Save
+1. Set it in `server/.env`, with no path, and restart the token server:
+   ```
+   PUBLIC_BASE_URL=https://YOUR-DOMAIN.ngrok-free.app
+   TWILIO_AUTH_TOKEN=…   # the account's primary Auth Token
+   ```
+   The boot log should say `twilio webhook signatures: required, checked against https://YOUR-DOMAIN.ngrok-free.app`.
+2. In console.twilio.com → Voice → TwiML Apps → your app → set **Voice URL** to `https://YOUR-DOMAIN.ngrok-free.app/twiml`
+3. HTTP method: GET or POST (server handles both, and both are signed)
+4. Save
+
+**Twilio's webhooks must be signed.** Twilio signs every webhook request with the account's Auth Token over the exact URL it requested plus every POST parameter (`X-Twilio-Signature`). `/twiml`, `/`, `/sms/inbound` and `/sms/status` check that signature against `PUBLIC_BASE_URL` + the request's path and query, and refuse anything else with `403` — so knowing the tunnel URL is not enough to forge an inbound SMS, a delivery update or a call. Until both settings exist, every webhook gets `503`. The URLs in the Twilio console must start with exactly `PUBLIC_BASE_URL`; if you change the tunnel address, update both. See `server/README.md` → "Twilio webhook signatures" for the refusal log lines and troubleshooting.
 
 **Important gotcha:** if you point the Voice URL at the bare tunnel (`https://…ngrok-free.app` with no path), the server now serves TwiML at `/` too (defensive — added after a real bug). Use `/twiml` for cleanliness.
 
@@ -97,6 +107,9 @@ curl -H "ngrok-skip-browser-warning: true" https://YOUR-DOMAIN.ngrok-free.app/he
 ```bash
 curl -X POST -H "ngrok-skip-browser-warning: true" https://YOUR-DOMAIN.ngrok-free.app/token
 # expect: 403 {"error":"private route: not reachable through a tunnel or proxy"}
+curl -X POST -H "ngrok-skip-browser-warning: true" https://YOUR-DOMAIN.ngrok-free.app/sms/inbound \
+  --data-urlencode From=+15555550199 --data-urlencode Body=forged
+# expect: 403 {"error":"missing Twilio signature"} — and nothing stored
 ```
 
 If you get NXDOMAIN from your own terminal, your local DNS is broken — Twilio uses its own DNS, so this doesn't block the test. Use 1.1.1.1 to confirm globally:
@@ -125,9 +138,9 @@ To get the `sent` → `delivered` / `failed` badge updates in the panel, the ser
 
 **Setup (one-time):**
 
-1. Add this env var to `server/.env`:
+1. Set `PUBLIC_BASE_URL` in `server/.env` (see §3); the server derives `<base>/sms/status` from it:
    ```
-   SMS_STATUS_CALLBACK_URL=https://YOUR-DOMAIN.ngrok-free.app/sms/status
+   PUBLIC_BASE_URL=https://YOUR-DOMAIN.ngrok-free.app
    ```
 2. Restart the token server. You should see on boot:
    ```
@@ -135,7 +148,7 @@ To get the `sent` → `delivered` / `failed` badge updates in the panel, the ser
    ```
 3. No Twilio console change is needed — the status callback URL is per-message, registered automatically by our `handleSmsSend` when it calls `messages.create()`.
 
-**Alternative: set `SMS_PUBLIC_BASE_URL`** (e.g. `https://YOUR-DOMAIN.ngrok-free.app`) and the server will derive `/sms/status` from it. Same effect, one fewer path to keep in sync.
+**Override: `SMS_STATUS_CALLBACK_URL`** sets the full callback URL instead. Twilio signs status callbacks for the URL they were registered with, and the server checks them against `PUBLIC_BASE_URL/sms/status`, so the override must be that same URL or the updates are refused (the boot log warns). Leaving it unset is simpler. `SMS_PUBLIC_BASE_URL` is the older name for `PUBLIC_BASE_URL` and still works.
 
 **Settling time:** outbound messages typically reach `delivered` within 2–10 seconds in the US. International can take longer. The 3s polling means there's up to a 3s display lag between Twilio delivering and the badge updating.
 
@@ -187,11 +200,11 @@ To get the `sent` → `delivered` / `failed` badge updates in the panel, the ser
         ┌────────────────────────┐
         │ server/server.js       │  127.0.0.1:5050
         │  POST /token → JWT     │  (token: private, local API key)
-        │  GET|POST /twiml → XML │  (twiml: public via ngrok)
+        │  GET|POST /twiml → XML │  (twiml: public, Twilio-signed)
         │  POST /sms/send        │  (sms/send: private, local API key)
         │  GET /sms/conversations│  (sms/list: private, local API key)
-        │  POST /sms/inbound     │  (sms/inbound: public via ngrok)
-        │  POST /sms/status      │  (sms/status: public via ngrok)
+        │  POST /sms/inbound     │  (sms/inbound: public, Twilio-signed)
+        │  POST /sms/status      │  (sms/status: public, Twilio-signed)
         │  GET /health           │
         └────────────────────────┘
                 ▲
@@ -239,7 +252,7 @@ Two channel types:
 | `main/services/tokenBroker.js` | Fetches/mints capability tokens. |
 | `main/services/smsBroker.js` | HTTP client to local server's `/sms/*` endpoints. Mirrors tokenBroker pattern. |
 | `main/services/localApiAuth.js` | Adds the local server's API key (`Authorization: Bearer …`) to the brokers' requests to a loopback server, read fresh per request. |
-| `server/server.js` | Local Node service. `POST /token` (private), `GET\|POST /twiml` (public via ngrok), `POST /sms/send` + `GET /sms/conversations` (private), `POST /sms/inbound` + `POST /sms/status` (public via ngrok), `GET /health` (public). Private routes refuse tunneled/proxied requests and need the local API key (`checkPrivateAccess`); any route not in `PUBLIC_ROUTES` is private. |
+| `server/server.js` | Local Node service. `POST /token` (private), `GET\|POST /twiml` (public via ngrok), `POST /sms/send` + `GET /sms/conversations` (private), `POST /sms/inbound` + `POST /sms/status` (public via ngrok), `GET /health` (public). Private routes refuse tunneled/proxied requests and need the local API key (`checkPrivateAccess`); any route not in `PUBLIC_ROUTES` is private. The webhooks (`TWILIO_WEBHOOK_ROUTES`) need a valid Twilio signature over `PUBLIC_BASE_URL` + path + query and every POST parameter (`checkTwilioSignature`, via `handleTwilioWebhook`). |
 | `server/localApiKey.js` | Generates the per-start local API key and writes it 0600 to `server/.local-api-key` (or `OPERATOR_LOCAL_API_KEY_FILE`) once the server owns its port. |
 | `server/smsStore.js` | JSON-backed conversation store. E.164 keyed, 500-msg cap, atomic write. Exposes `updateMessageBySid` for status callbacks. |
 | `server/.env.example` | Documents the required env vars (now includes optional `TWILIO_SMS_FROM` and `OPERATOR_IDENTITY`). |
@@ -330,7 +343,7 @@ Two channel types:
 
 **Inbound:**
 1. Twilio receives an SMS at the configured number and POSTs to the inbound webhook (our ngrok `/sms/inbound`)
-2. `server.js` `handleSmsInbound` parses the form body (`From`, `Body`, `MessageSid`, `SmsStatus`)
+2. `server.js` `handleTwilioWebhook` reads the form body and checks `X-Twilio-Signature` against `PUBLIC_BASE_URL/sms/inbound` and every parameter (403 and nothing stored if it does not match); `handleSmsInbound` then reads `From`, `Body`, `MessageSid`, `SmsStatus`
 3. Persists to the store with direction `inbound`, real `sid` from Twilio, status `received`
 4. Returns empty `<Response/>` to Twilio so it doesn't retry
 5. Renderer's `smsService` is polling every 3s; the next poll fetches the updated conversation list
@@ -338,7 +351,7 @@ Two channel types:
 7. If the user is on the `SmsPanel`, `SmsPanel` detects the new message count in the selected thread and re-fetches the thread in the background
 8. New bubble appears in the thread view with `at` timestamp
 
-**Trust model on inbound:** for v1 the inbound endpoint trusts the tunnel URL (ngrok's URL is unguessable and no secrets are exposed in the response). Twilio webhook signature verification is a v2 item — flagged in the `handleSmsInbound` comment.
+**Trust model on inbound:** the inbound and status endpoints accept only requests carrying Twilio's signature, made with the account's Auth Token over the exact public URL and all parameters (§3). Knowing the tunnel URL is not enough to add a message or change a delivery status. A captured genuine request could still be sent again, since signatures carry no timestamp.
 
 ---
 
@@ -435,13 +448,13 @@ These bugs were hit and fixed during the build-out. If you see these symptoms, t
 
 ## 10a. SMS chat — shipped 2026-06-10
 
-End-to-end SMS chat in the `Messages` tab. Programmable SMS via Twilio REST + inbound webhook, polling-based UI (3s), JSON-file persistence, no new secrets required (reuses `TWILIO_API_KEY` / `TWILIO_API_SECRET` from `server/.env`).
+End-to-end SMS chat in the `Messages` tab. Programmable SMS via Twilio REST + inbound webhook, polling-based UI (3s), JSON-file persistence. Sending reuses `TWILIO_API_KEY` / `TWILIO_API_SECRET` from `server/.env`; receiving needs `TWILIO_AUTH_TOKEN` and `PUBLIC_BASE_URL` to check Twilio's webhook signatures (§3).
 
 **What works:**
 - Outbound: composer → IPC → broker → server → Twilio `messages.create` → real SID + status reflected in the bubble
 - Inbound: Twilio POSTs to `/sms/inbound` via ngrok → persisted → next 3s poll surfaces in list + thread
 - Inbound notifications: a genuinely new inbound message triggers a native OS notification + bundled sound (`public/notification.wav`), deduped per session by message SID (see §6b)
-- Delivery receipts: when `SMS_STATUS_CALLBACK_URL` is set, Twilio POSTs to `/sms/status` on every state change; badge updates `queued` → `sent` → `delivered` (or → `failed`/`undelivered`) within ~3s. See §3c.
+- Delivery receipts: when `PUBLIC_BASE_URL` is set, Twilio POSTs to `/sms/status` on every state change; badge updates `queued` → `sent` → `delivered` (or → `failed`/`undelivered`) within ~3s. See §3c.
 - Failed sends are persisted as `failed` (red badge in UI) so they don't vanish
 - Conversations sorted newest-first; 500-msg cap per thread; body capped at 1600 chars (Twilio limit)
 - "+ New" button to start a thread with any E.164 number
@@ -452,7 +465,6 @@ End-to-end SMS chat in the `Messages` tab. Programmable SMS via Twilio REST + in
 - Group threads
 - Read receipts
 - Typing indicators
-- Inbound signature verification (v1 trusts the tunnel URL; flagged for v2)
 - SSE push for inbound (v1 uses 3s polling)
 
 **Prod gate (US destinations):** A2P 10DLC brand + campaign registration is required for production SMS. Dev with a single verified/owned number is unrestricted. Register at https://console.twilio.com/us1/develop/sms/a2p-registration before going to prod.
@@ -465,8 +477,7 @@ End-to-end SMS chat in the `Messages` tab. Programmable SMS via Twilio REST + in
 4. **Operator-to-Operator chat & video** — would need Twilio Conversations + Video SDKs, both new deps.
 5. **Distribution** — `electron-builder` for macOS/Windows/Linux installers. Not in package.json yet.
 6. **SMS: SSE push for inbound** — replace 3s polling with server-sent events. Saves battery, gives instant-feel UX.
-7. **SMS: Twilio webhook signature verification** — currently trusts the tunnel URL. Add `twilio.validateRequest(...)` in `handleSmsInbound` before persisting.
-8. **TwiML App caller ID** — must be set in console for outbound voice calls to work (see §8a).
+7. **TwiML App caller ID** — must be set in console for outbound voice calls to work (see §8a).
 
 ---
 
@@ -526,8 +537,10 @@ node --check server.js        # Syntax check
 | `server/.env` | `OPERATOR_IDENTITY` | **Required for inbound calls (added 2026-07-19).** The Twilio Client identity that inbound PSTN calls ring. Must match whatever identity the renderer registers with in the AccountConfig form. The TwiML App's inbound branch emits `<Dial><Client>{OPERATOR_IDENTITY}</Client></Dial>`. If unset, `/twiml` falls back to a `say`/hangup. |
 | `server/.env` | `TWILIO_SMS_FROM` | **Optional.** Dedicated sender for outbound SMS; falls back to `TWILIO_CALLER_ID`. Set this if voice and SMS numbers differ. |
 | `server/.env` | `SMS_STORE_PATH` | **Optional.** Override the conversation-store JSON path. Default `<server dir>/sms-store.json`. |
-| `server/.env` | `SMS_STATUS_CALLBACK_URL` | **Optional.** Full URL Twilio should POST to on delivery status changes (e.g. `https://YOUR-DOMAIN.ngrok-free.app/sms/status`). See §3c. |
-| `server/.env` | `SMS_PUBLIC_BASE_URL` | **Optional.** If `SMS_STATUS_CALLBACK_URL` is unset, the server derives `<base>/sms/status` from this. |
+| `server/.env` | `TWILIO_AUTH_TOKEN` | **Required for Twilio's webhooks (added 2026-10-24).** The account's primary Auth Token. Used only to check `X-Twilio-Signature` on `/twiml`, `/sms/inbound` and `/sms/status`; without it every webhook gets 503. See §3. |
+| `server/.env` | `PUBLIC_BASE_URL` | **Required for Twilio's webhooks (added 2026-10-24).** The tunnel's public address with no path (e.g. `https://YOUR-DOMAIN.ngrok-free.app`). Signatures are checked against it plus each request's path and query; the SMS status callback defaults to `<base>/sms/status`. See §3 and §3c. |
+| `server/.env` | `SMS_STATUS_CALLBACK_URL` | **Optional.** Overrides the status callback URL; it must still be `PUBLIC_BASE_URL/sms/status` or delivery updates fail the signature check. See §3c. |
+| `server/.env` | `SMS_PUBLIC_BASE_URL` | **Optional.** Older name for `PUBLIC_BASE_URL`, still read when `PUBLIC_BASE_URL` is unset. |
 | main process | `TOKEN_BACKEND_URL` | override default `http://127.0.0.1:5050/token` |
 | main process | `SMS_BACKEND_URL` | **Optional.** Override default `http://127.0.0.1:5050` for the SMS broker. |
 | `server/.env` + main process | `OPERATOR_LOCAL_API_KEY_FILE` | **Optional.** Where the server writes, and the main process reads, the per-start local API key. Default `server/.local-api-key`. If you set it, set the same path for both processes. |
@@ -578,6 +591,7 @@ if (!to) {  // no `To` param = Twilio POSTing the number's voiceUrl
 | Twilio call log | `direction: inbound`, `answered_by: null`, `errorCode: undefined`, `duration: 0` | Device leg never connects. Stale JWT, identity mismatch, or stale WS. |
 | Softphone DevTools console | Nothing logged; no Network request | Renderer's `device.on('incoming')` listener never fired → WS is closed or Device isn't registered. |
 | ngrok inspection | `POST /twiml 200 OK` | Backend path is fine; failure is downstream of Twilio fetching the TwiML. |
+| ngrok inspection | `POST /twiml 403` or `503` | The signature check refused Twilio's request: `TWILIO_AUTH_TOKEN` is not the primary Auth Token, the Voice URL does not start with exactly `PUBLIC_BASE_URL`, or (503) one of the two is not set. The token server logs `[webhook] refused …` with the reason. |
 | Softphone DevTools console | `Twilio.errors.AccessTokenInvalid (20101)` | `.env` references dead API Key. See §16. |
 
 **Failure mode commonly hit:**
