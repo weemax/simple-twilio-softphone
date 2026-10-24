@@ -64,7 +64,10 @@ updates. Without both, the server refuses every webhook (see
 - `PUBLIC_BASE_URL` — the public address Twilio calls, with no path, e.g.
   `https://YOUR-DOMAIN.ngrok-free.app`. The status callback for outbound
   SMS is derived from it too (`<base>/sms/status`). The older name
-  `SMS_PUBLIC_BASE_URL` still works.
+  `SMS_PUBLIC_BASE_URL` still works. Under `npm run phone` (project root)
+  you do not need it: the launcher reads the address ngrok assigned and
+  passes it, with `SMS_STATUS_CALLBACK_URL=<address>/sms/status`, in this
+  server's environment, which `server/.env` never overrides.
 
 ### .env.example
 
@@ -171,7 +174,11 @@ does, behind a tunnel-shaped proxy, if you need a worked example.
 ### `GET /health`
 
 Returns `{ok: true, ts: <epoch_ms>}`. Useful for the renderer to verify
-the server is up before requesting a token.
+the server is up before requesting a token. When `npm run phone` started
+the server it also returns `launch: <id>`, the random per-launch id from
+`OPERATOR_LAUNCH_ID`, so the launcher and the app can tell this server,
+reached directly or through the tunnel, from another program on the port.
+The id identifies the run and grants nothing.
 
 ### `POST /token`
 

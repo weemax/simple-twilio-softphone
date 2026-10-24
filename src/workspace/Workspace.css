@@ -188,6 +188,16 @@
 .active .badge {
   background: var(--bg-elev);
 }
+/* A limitation the person should know about, such as a missing tunnel. */
+.workspace-app .notice {
+  background: rgba(210, 153, 34, 0.12);
+  border: 1px solid rgba(210, 153, 34, 0.45);
+  color: #f2d48a;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin: 8px 20px 0;
+  line-height: 1.45;
+}
 .connection-list {
   display: grid;
   grid-template-columns: minmax(120px, 1fr) 2fr;

@@ -3,7 +3,7 @@
 **Project:** Twilio-powered desktop soft phone (Electron + React)
 **Location:** `/Users/izzy/Projects/WebWolf/twilio-phone`
 **Status:** Voice soft phone end-to-end (UI + Twilio Voice + WebRTC Device + Token broker). SMS chat feature shipped 2026-06-10 — server endpoints, IPC bridge, renderer service, and chat panel UI. Inbound calls now route to the softphone with an Answer/Decline UI, and outbound/inbound Dials preserve ringback via `answerOnBridge` (see §6a). Inbound SMS now also triggers a native OS notification + bundled sound (see §10a). Outbound PSTN calls require the TwiML App's outbound Caller ID to be set in console (see §8a); inbound calls require `OPERATOR_IDENTITY` set in `server/.env` (see §13); SMS requires the inbound webhook URL to be set on a Twilio number (see §3b). Every Twilio webhook must carry a valid Twilio signature, which needs `TWILIO_AUTH_TOKEN` and `PUBLIC_BASE_URL` in `server/.env` (see §3).
-**Recent updates:** Inbound PSTN ringing wired (2026-07-19, see §15). API-key rotation recovery documented (2026-07-19, see §16). Twilio webhook signatures checked on `/twiml`, `/sms/inbound` and `/sms/status` (2026-10-24, see §3).
+**Recent updates:** Inbound PSTN ringing wired (2026-07-19, see §15). API-key rotation recovery documented (2026-07-19, see §16). Twilio webhook signatures checked on `/twiml`, `/sms/inbound` and `/sms/status` (2026-10-24, see §3). One-command startup with `npm run phone` (2026-10-24, see §2 and "Accepted phone UX work — launcher piece").
 **Original Author:** Kevin Whinnery (forked from kwhinnery/operator, abandoned)
 **Last Updated:** 2026-10-24
 
@@ -48,9 +48,51 @@ remains until that separate piece replaces it; do not access real stored secrets
 tests. Unrelated unpublished `tests/truhome/` and `tools/sms-agent-harness/` work stays
 in the adopted folder unchanged and is not folded into this PR.
 
+## Accepted phone UX work — launcher piece
+
+`npm run phone` (`launcher/phone.js` → `launcher/supervisor.js`) starts the local
+service, the React dev server, ngrok and Electron, and supervises them:
+
+- **Order and readiness.** React and ngrok start first. ngrok runs with JSON logs; its
+  "starting web service" line names *its* local status address, and the assigned
+  public address is read there (`/api/endpoints`, falling back to the deprecated
+  `/api/tunnels`; `launcher/ngrok.js`). The service then starts with
+  `PUBLIC_BASE_URL`/`SMS_STATUS_CALLBACK_URL` set to that address and a random
+  `OPERATOR_LAUNCH_ID`, which `/health` echoes. Ready means: `/health` answers with this
+  launch's id, the same id comes back through the tunnel, React serves its page, and
+  Electron prints `[operator] window ready` (main.js, on `did-finish-load`). Each wait
+  has a deadline; none is a fixed sleep.
+- **Tunnel problems never stop the launch.** ngrok missing, not signed in
+  (`ERR_NGROK_4018`), rejected sign-in (105/107), account agent limit (108) or address
+  already online (334) are explained, and the app opens without a tunnel. A tunnel that
+  drops later is reported as stopped.
+- **Explanations before anything starts.** Missing packages, missing required
+  `server/.env` settings, an occupied service or React port (with the occupant named
+  via `lsof`) and processes left by an earlier run all stop the launch with a fix.
+- **One writer.** `.operator-phone/run.json` is created exclusively (written beside it,
+  then hard-linked into place) and names the launcher and every child with its `ps`
+  start time, so a reused pid never counts as ours. A second launch in the same project
+  refuses. Electron's `requestSingleInstanceLock()` keeps one window per profile;
+  a second copy focuses the first and quits.
+- **Owned shutdown.** Each child is spawned detached, so it leads its own process group;
+  stopping signals the whole group (SIGTERM, then SIGKILL after a grace period).
+  Quitting Operator, Ctrl+C, SIGTERM/SIGHUP, or a part that stops unexpectedly stops
+  all of them. `npm run phone -- --stop` asks a running launcher to stop, or stops the
+  verified leftovers of one that died.
+- **What the app shows.** The launcher writes `.operator-phone/session.json`
+  (`OPERATOR_SESSION_FILE`); `main/services/session.js` answers the `session:status`
+  IPC call from it plus a live `/health` check. `src/workspace/ConnectionPanel.jsx`
+  keeps the local service, tunnel, voice registration, message updates, SMS sender and
+  Twilio account in separate rows, and shows a notice while the tunnel is unavailable.
+
+Tests: `src/launcher.test.js` (real `server/server.js`, stand-ins in
+`launcher/test-fakes/` for React, Electron and ngrok; no real tunnel),
+`src/sessionStatus.test.js`, `src/workspace/ConnectionPanel.test.js`.
+
 ## 2. Quick Start
 
-Three processes are needed for full development. Open three terminals at the project root.
+Normally one command runs everything; see "Each session". The three low-level
+processes can still be started separately in three terminals at the project root.
 
 ### One-time setup
 
@@ -71,6 +113,18 @@ cd ..
 - `PUBLIC_BASE_URL` — your tunnel's address, e.g. `https://YOUR-DOMAIN.ngrok-free.app` (see §3)
 
 ### Each session
+
+```
+npm run phone
+```
+
+It starts the token server, React dev server, ngrok and Electron, waits until each
+answers, prints the tunnel address, and stops everything it started when you quit
+Operator or press Ctrl+C. Options: `--react-port`, `--service-port`, `--stop`
+(`npm run phone -- --help`). ngrok must be installed and signed in once
+(`ngrok config add-authtoken …`).
+
+Or start the parts yourself:
 
 ```
 # Terminal 1 — token server (signs Twilio AccessTokens + serves /twiml)
@@ -101,11 +155,16 @@ ELECTRON_IS_DEV=0 npm start
 
 Twilio's webhook servers need a public HTTPS URL pointing at your local `/twiml` endpoint. ngrok is the standard dev tunnel.
 
-```
-ngrok http --domain=YOUR-RESERVED-DOMAIN.ngrok-free.app 5050
-```
+`npm run phone` starts ngrok itself (`ngrok http 127.0.0.1:5050`), reads the address
+it assigned and passes it to the token server, so step 1 below is not needed then.
+ngrok assigns every account's dev domain automatically; nobody types it. Steps 2–4
+(the Twilio console URLs) are still manual until the reviewed in-app setup piece.
 
-The reserved dev domain (free, no endpoint hours) must be set up first at https://dashboard.ngrok.com/cloud-edge/domains — see screenshot in §11 for what that page looks like.
+Started by hand instead:
+
+```
+ngrok http 5050
+```
 
 Copy the printed `https://…ngrok-free.app` URL and:
 
@@ -270,9 +329,17 @@ Two channel types:
 
 | File | Purpose |
 |------|---------|
-| `package.json` | Root project. Scripts: `dev`, `start`, `build`, `test`, `token-server`, `dev:all`. |
-| `main.js` | Electron main. Creates window with `contextIsolation: true`, registers all IPC handlers, blocks in-app navigation to external URLs. |
-| `preload.js` | Context-isolated bridge. Exposes `window.operator.{config, token, secrets, sms, notifications, app, on}`. Channel allowlists. |
+| `package.json` | Root project. Scripts: `phone`, `dev`, `start`, `build`, `test`, `token-server`, `dev:all`. |
+| `launcher/phone.js` | `npm run phone` command line: `--react-port`, `--service-port`, `--stop`, `--help`. |
+| `launcher/supervisor.js` | Starts, waits on and stops the service, React, ngrok and Electron; writes the session status file. |
+| `launcher/ngrok.js` | Starts ngrok, reads the assigned address from its local status, explains its error codes. |
+| `launcher/processes.js` | Owned child processes: detached process groups, `ps` start-time identity, group shutdown. |
+| `launcher/runLock.js` | `.operator-phone/run.json`: one launcher per project, stale/leftover detection. |
+| `launcher/checks.js` | Install, `server/.env` and port checks; readiness HTTP reads. |
+| `launcher/test-fakes/` | Stand-in React, Electron and ngrok processes for `src/launcher.test.js`; never used by `npm run phone`. |
+| `main.js` | Electron main. Creates window with `contextIsolation: true`, registers all IPC handlers, blocks in-app navigation to external URLs. Holds the single-instance lock, loads the dev renderer from `OPERATOR_RENDERER_URL` (loopback only, default `http://localhost:3000`) and prints `[operator] window ready` for the launcher. |
+| `preload.js` | Context-isolated bridge. Exposes `window.operator.{config, token, secrets, sms, notifications, session, app, on}`. Channel allowlists. |
+| `main/services/session.js` | `session:status`: live `/health` check of the local service plus the tunnel state `npm run phone` wrote. |
 | `main/services/secrets.js` | safeStorage wrapper, plaintext fallback. |
 | `main/services/config.js` | Plaintext non-secret config (SID, identity). |
 | `main/services/tokenBroker.js` | Fetches/mints capability tokens. |
@@ -284,6 +351,8 @@ Two channel types:
 | `server/.env.example` | Documents the required env vars (now includes optional `TWILIO_SMS_FROM` and `OPERATOR_IDENTITY`). |
 | `server/README.md` | Server-specific setup, security notes. |
 | `src/App.js` | Workspace shell: persistent navigation, contacts, dialer/recents, call overlay, Messages and legacy account settings. |
+| `src/workspace/ConnectionPanel.jsx` | Settings → Connection rows, status-strip summaries and the tunnel notice. |
+| `src/workspace/useSessionStatus.js` | Polls `window.operator.session.status()` every 5 s. |
 | `src/App.css` | Dark softphone theme. |
 | `src/services/twilioService.js` | Device wrapper, snapshot pub/sub, token-refresh, mute, DTMF (with quiet local feedback tones), forwards `ringing`/`hasEarlyMedia`/`reconnecting`/`reconnected`, call placement. |
 | `src/services/smsService.js` | SMS service singleton. Pub/sub snapshot, 3s polling, send, getThread, inbound-notification detection (dedupes by message SID, capped at `MAX_SEEN_INBOUND_IDS`). |
@@ -526,6 +595,8 @@ End-to-end SMS chat in the `Messages` tab. Programmable SMS via Twilio REST + in
 
 ```bash
 # from project root
+npm run phone         # Service + React + ngrok + Electron, stopped together
+npm run phone -- --stop   # Stop it from another terminal, or an earlier run's leftovers
 npm run dev           # React dev server (port 3000)
 npm start             # Electron
 npm run token-server  # Localhost capability-token + /twiml broker
@@ -567,6 +638,9 @@ node --check server.js        # Syntax check
 | `server/.env` | `PUBLIC_BASE_URL` | **Required for Twilio's webhooks (added 2026-10-24).** The tunnel's public address with no path (e.g. `https://YOUR-DOMAIN.ngrok-free.app`). Signatures are checked against it plus each request's path and query; the SMS status callback defaults to `<base>/sms/status`. See §3 and §3c. |
 | `server/.env` | `SMS_STATUS_CALLBACK_URL` | **Optional.** Overrides the status callback URL; it must still be `PUBLIC_BASE_URL/sms/status` or delivery updates fail the signature check. See §3c. |
 | `server/.env` | `SMS_PUBLIC_BASE_URL` | **Optional.** Older name for `PUBLIC_BASE_URL`, still read when `PUBLIC_BASE_URL` is unset. |
+| server (set by `npm run phone`) | `OPERATOR_LAUNCH_ID` | Random per-launch id echoed by `/health`; also sets `PUBLIC_BASE_URL` and `SMS_STATUS_CALLBACK_URL` to ngrok's assigned address. |
+| main process (set by `npm run phone`) | `OPERATOR_SESSION_FILE` | The launcher's `.operator-phone/session.json`, read by `session:status`. Unset means the tunnel is reported as not checked. |
+| main process (set by `npm run phone`) | `OPERATOR_RENDERER_URL` | Dev renderer address; only `http://localhost` or `http://127.0.0.1` is accepted. |
 | main process | `TOKEN_BACKEND_URL` | override default `http://127.0.0.1:5050/token` |
 | main process | `SMS_BACKEND_URL` | **Optional.** Override default `http://127.0.0.1:5050` for the SMS broker. |
 | `server/.env` + main process | `OPERATOR_LOCAL_API_KEY_FILE` | **Optional.** Where the server writes, and the main process reads, the per-start local API key. Default `server/.local-api-key`. If you set it, set the same path for both processes. |

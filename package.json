@@ -10,6 +10,7 @@
     "electron-is-dev": "^1.1.0"
   },
   "scripts": {
+    "phone": "node launcher/phone.js",
     "start": "electron .",
     "dev": "BROWSER=none react-scripts start",
     "build": "react-scripts build",

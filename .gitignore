@@ -102,3 +102,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 tests/**/node_modules
+
+# npm run phone: run lock and session status (pids, ports, tunnel address)
+.operator-phone/

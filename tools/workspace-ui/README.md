@@ -73,7 +73,7 @@ The test waits for an acknowledged real IPC metadata write, terminates **only it
 own test process**, and relaunches it to prove even an abrupt full restart preserves
 the two drafts. It then checks that the real private API persists failed and unknown
 outcomes and that the real bridge surfaces them. This is deliberately not a test
-of the future launcher's graceful process shutdown. It removes its disposable
+of `npm run phone`'s graceful process shutdown; `src/launcher.test.js` covers that. It removes its disposable
 profile/database after reading the results, on success or failure.
 
 ## Real-speed draft demonstration

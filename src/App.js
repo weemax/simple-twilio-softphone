@@ -5,6 +5,13 @@ import { WorkspaceProvider, useWorkspace } from './workspace/WorkspaceContext';
 import { normalizePhone, unreadCount } from './workspace/model';
 import { Contacts } from './workspace/Contacts';
 import { ConfirmDialog } from './workspace/ConfirmDialog';
+import {
+  ConnectionPanel,
+  TunnelNotice,
+  serviceSummary,
+  tunnelSummary,
+} from './workspace/ConnectionPanel';
+import { useSessionStatus } from './workspace/useSessionStatus';
 import { formatNumber } from './formatNumber';
 import { AccountConfig } from './components/AccountConfig/AccountConfig';
 import { Dialpad } from './components/Dialpad/Dialpad';
@@ -19,6 +26,7 @@ function MainPanel() {
     { snapshot: sms } = useSms();
   const { data, update, ready, saveError, nameFor } = useWorkspace();
   const { snapshot, placeCall, register } = voice;
+  const session = useSessionStatus();
   const [config, setConfig] = useState(null),
     [number, setNumber] = useState(''),
     [callsView, setCallsView] = useState('dialer');
@@ -150,6 +158,8 @@ function MainPanel() {
         )}
       </header>
       <div className="status-bar" role="status">
+        <span>Service: {serviceSummary(session).short}</span>
+        <span>Tunnel: {tunnelSummary(session).short}</span>
         <span>
           Voice: {snapshot.connecting ? 'connecting call' : snapshot.state}
         </span>
@@ -168,6 +178,7 @@ function MainPanel() {
           {saveError}
         </p>
       )}
+      <TunnelNotice status={session} />
       <div className="workspace-layout">
         <nav className="workspace-nav" aria-label="Main navigation">
           {['messages', 'calls', 'contacts', 'settings'].map((v) => (
@@ -308,37 +319,12 @@ function MainPanel() {
               </button>
             </div>
             {settingsView === 'connection' ? (
-              <div className="panel">
-                <h3>Connection</h3>
-                <dl className="connection-list">
-                  <dt>Voice registration</dt>
-                  <dd>{snapshot.state}</dd>
-                  <dt>Message updates</dt>
-                  <dd>
-                    {sms.lastError ||
-                      (sms.hydrated
-                        ? 'Connected to the local service'
-                        : 'Loading')}
-                  </dd>
-                  <dt>SMS sender</dt>
-                  <dd>
-                    {formatNumber(sms.smsFrom || sms.callerId) ||
-                      'Not configured'}
-                  </dd>
-                  <dt>Account configuration</dt>
-                  <dd>
-                    {configured
-                      ? 'Saved locally; provider setup remains manual'
-                      : 'Not configured'}
-                  </dd>
-                  <dt>Public tunnel</dt>
-                  <dd>
-                    Not checked by this version. One-command startup and the
-                    automated setup follow separately.
-                  </dd>
-                </dl>
-                {snapshot.error && <p className="error">{snapshot.error}</p>}
-              </div>
+              <ConnectionPanel
+                status={session}
+                voice={snapshot}
+                sms={sms}
+                configured={configured}
+              />
             ) : (
               <>
                 <p className="muted small">

@@ -15,6 +15,8 @@ const INVOKABLE_CHANNELS = new Set([
   'config:clear',
   // Capability tokens (server-side)
   'token:fetch',
+  // Local service and tunnel status
+  'session:status',
   // App lifecycle / shell
   'app:platform',
   'app:version',
@@ -93,6 +95,12 @@ const api = {
     clear: (payload) => ipcRenderer.invoke('sms:clear', payload),
     // Operator identity as the token server sees it: callerId + smsFrom.
     me: () => ipcRenderer.invoke('sms:me'),
+  },
+
+  session: {
+    // { ok, managed, service: { state, url, detail }, tunnel: { state, url, reason } }.
+    // See main/services/session.js for the states.
+    status: () => ipcRenderer.invoke('session:status'),
   },
 
   app: {
