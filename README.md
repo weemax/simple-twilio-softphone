@@ -27,6 +27,7 @@ This project is a fork of Kevin Whinnery's abandoned [operator](https://github.c
 | SMS: delivery status badges (queued → sent → delivered / failed) | working, **requires `SMS_STATUS_CALLBACK_URL` set in `server/.env`** (see `HANDOFF.md` §3c) |
 | SMS: read receipts, typing indicators, MMS, group threads, search | not implemented (out of scope) |
 | Phone number management UI | not implemented (planned) |
+| Private routes (`/token`, `/sms/send`, `/sms/conversations`) closed to the tunnel | working — tunneled requests get 403; the app's main process uses a per-start local API key |
 | Inbound webhook signature verification | not implemented (v1 trusts the tunnel URL) |
 | Production distribution (electron-builder installers) | not implemented |
 
@@ -61,7 +62,7 @@ For Twilio to reach your local webhook endpoints (both `/twiml` for voice and `/
 ngrok http --domain=YOUR-RESERVED-DOMAIN.ngrok-free.app 5050
 ```
 
-Then configure the URLs in the Twilio console — full walkthroughs in `HANDOFF.md` §3 (voice) and §3b/§3c (SMS).
+Then configure the URLs in the Twilio console — full walkthroughs in `HANDOFF.md` §3 (voice) and §3b/§3c (SMS). Only the webhook paths and `/health` answer through the tunnel; the private routes refuse tunneled requests.
 
 ## Production-mode test
 
@@ -103,17 +104,17 @@ ELECTRON_IS_DEV=0 npm start
 
         ┌────────────────────────┐
         │ server/server.js       │  127.0.0.1:5050
-        │  /token                │  localhost only
+        │  /token                │  private (local API key)
         │  /twiml                │  public via ngrok
-        │  /sms/send             │  localhost only
-        │  /sms/conversations    │  localhost only
+        │  /sms/send             │  private (local API key)
+        │  /sms/conversations    │  private (local API key)
         │  /sms/inbound          │  public via ngrok
         │  /sms/status           │  public via ngrok
-        │  /health               │
+        │  /health               │  public
         └────────────────────────┘
 ```
 
-Renderer is sandboxed — Auth Token / API Secret never cross the IPC boundary, only signed JWTs and result data. The local server has a localhost guard on every endpoint except the two public webhooks (`/twiml` and `/sms/inbound` and `/sms/status`), which are reached via the unguessable ngrok URL.
+Renderer is sandboxed — Auth Token / API Secret never cross the IPC boundary, only signed JWTs and result data. The local server answers only its public routes — the webhooks `/twiml` (and `/`), `/sms/inbound` and `/sms/status`, plus `/health` — through the unguessable ngrok URL. Because the tunnel itself connects from 127.0.0.1, every other route is private: it refuses requests that carry tunnel/proxy forwarding headers or a public `Host`, and requires the local API key the server writes to `server/.local-api-key` on each start, which only the Electron main process reads. That key also stops a web page in your browser from posting to `127.0.0.1:5050`.
 
 ## License
 

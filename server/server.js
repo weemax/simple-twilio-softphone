@@ -1,7 +1,11 @@
 // Local capability token broker for Operator.
 //
 // Listens on http://127.0.0.1:5050 by default. NEVER bind to 0.0.0.0 — this
-// server has no auth and signs tokens with your Twilio API Secret.
+// server signs tokens with your Twilio API Secret.
+//
+// Only the routes in PUBLIC_ROUTES (Twilio's webhooks and /health) may be
+// reached through a tunnel. Every other route is private: see
+// checkPrivateAccess for what a request must show to reach one.
 //
 // Required env (set in `server/.env` or the parent shell):
 //   TWILIO_ACCOUNT_SID     — starts with AC…
@@ -24,6 +28,12 @@ const http = require('http');
 const path = require('path');
 const twilio = require('twilio');
 const { SmsStore, normalizeNumber, MAX_BODY_LENGTH } = require('./smsStore');
+const {
+  generateKey,
+  writeKeyFile,
+  keyFilePath,
+  keysMatch,
+} = require('./localApiKey');
 
 const PORT = parseInt(process.env.PORT || '5050', 10);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -115,27 +125,99 @@ function send(res, status, body) {
   res.end(text);
 }
 
+// The only routes a tunnel may reach: Twilio's webhooks plus /health for
+// checking the tunnel itself. Their responses carry no secrets or history.
+// Any route not listed here is private, so a new route stays off the
+// tunnel unless it is added on purpose.
+const PUBLIC_ROUTES = new Set([
+  '/health',
+  '/twiml',
+  '/',
+  '/sms/inbound',
+  '/sms/status',
+]);
+
+// Set by startServer(). Until then every private request is refused.
+let localApiKey = null;
+
+// Headers a reverse proxy or tunnel adds when it forwards a request (ngrok
+// adds the three X-Forwarded-* ones; Cloudflare Tunnel adds
+// CF-Connecting-IP). The Operator app's main process talks to this server
+// directly and never sends any of them. Tunnels can be configured to strip
+// them, which is why the local API key, not this list, is the real lock.
+const FORWARDING_HEADERS = [
+  'forwarded',
+  'via',
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-real-ip',
+  'cf-connecting-ip',
+];
+
+function isLocalRequest(req) {
+  const remote = req.socket.remoteAddress || '';
+  return (
+    remote === '127.0.0.1' ||
+    remote === '::1' ||
+    remote === '::ffff:127.0.0.1'
+  );
+}
+
+// The Host a direct request to this machine carries. A tunnel keeps the
+// public hostname, and a DNS-rebinding page in the browser carries its own.
+function isLoopbackHost(hostHeader) {
+  const host = (hostHeader || '').toLowerCase().replace(/:\d+$/, '');
+  return host === '127.0.0.1' || host === 'localhost' || host === '[::1]';
+}
+
+// A tunnel connects from loopback, so the socket address alone does not
+// prove a request came from the Operator app. A private route needs all of:
+//   1. a loopback connection,
+//   2. no sign of a proxy or tunnel (forwarding headers, a public Host),
+//   3. this server's local API key as a bearer token (see localApiKey.js).
+// Returns null when allowed, or the { status, error } to answer with.
+function checkPrivateAccess(req) {
+  if (!isLocalRequest(req)) {
+    return { status: 403, error: 'local only' };
+  }
+  const proxied = FORWARDING_HEADERS.some((h) => h in req.headers);
+  if (proxied || !isLoopbackHost(req.headers.host)) {
+    return {
+      status: 403,
+      error: 'private route: not reachable through a tunnel or proxy',
+    };
+  }
+  const auth = req.headers.authorization || '';
+  const presented = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  if (!keysMatch(localApiKey, presented)) {
+    return {
+      status: 401,
+      error:
+        'missing or invalid local API key (restart the token server and the app; see server/README.md)',
+    };
+  }
+  return null;
+}
+
 const server = http.createServer(async (req, res) => {
-  // /token: localhost only — it returns auth-signed JWTs.
-  // /twiml: must be reachable from Twilio's public webhook, so it does NOT
-  // enforce the localhost guard. Auth on this endpoint is "knowing the
-  // ngrok/tunnel URL" — the URL is unguessable, and we never put secrets in
-  // the TwiML response.
+  // Public routes: Twilio must reach these from the internet. Auth on them
+  // is "knowing the ngrok/tunnel URL" — the URL is unguessable, and we never
+  // put secrets in their responses.
+  // Private routes (/token, /sms/send, /sms/conversations): only the
+  // Operator app on this machine. /token returns auth-signed JWTs.
   const url = (req.url || '').split('?')[0];
+
+  if (!PUBLIC_ROUTES.has(url)) {
+    const denied = checkPrivateAccess(req);
+    if (denied) return send(res, denied.status, { error: denied.error });
+  }
 
   if (req.method === 'GET' && url === '/health') {
     return send(res, 200, { ok: true, ts: Date.now() });
   }
 
   if (url === '/token') {
-    const remote = req.socket.remoteAddress || '';
-    const isLocal =
-      remote === '127.0.0.1' ||
-      remote === '::1' ||
-      remote === '::ffff:127.0.0.1';
-    if (!isLocal) {
-      return send(res, 403, { error: 'local only' });
-    }
     if (req.method !== 'POST') {
       return send(res, 405, { error: 'method not allowed' });
     }
@@ -152,9 +234,6 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url === '/sms/send') {
-    if (!isLocalRequest(req)) {
-      return send(res, 403, { error: 'local only' });
-    }
     if (req.method !== 'POST') {
       return send(res, 405, { error: 'method not allowed' });
     }
@@ -162,9 +241,6 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url === '/sms/conversations') {
-    if (!isLocalRequest(req)) {
-      return send(res, 403, { error: 'local only' });
-    }
     if (req.method !== 'GET') {
       return send(res, 405, { error: 'method not allowed' });
     }
@@ -368,18 +444,6 @@ function sendTwiml(res, response) {
 }
 
 // --- SMS ---
-
-// Shared between /sms/* handlers. /token-style localhost guard.
-// /sms/inbound is the only public endpoint, and it does its own
-// content-type handling.
-function isLocalRequest(req) {
-  const remote = req.socket.remoteAddress || '';
-  return (
-    remote === '127.0.0.1' ||
-    remote === '::1' ||
-    remote === '::ffff:127.0.0.1'
-  );
-}
 
 // Used by /sms/send (JSON body) and /sms/conversations (no body).
 function readJsonBody(req, maxBytes = 64 * 1024) {
@@ -625,14 +689,39 @@ function handleSmsList(req, res) {
   return send(res, 200, { conversations: smsStore.listConversations() });
 }
 
-module.exports = { renderTwiml };
+// Listen, then issue this run's local API key. The key file is written only
+// once this process owns the port, so a second copy that fails to bind
+// cannot replace the running server's key.
+function startServer({ port = PORT, host = HOST } = {}) {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, () => {
+      server.off('error', reject);
+      try {
+        localApiKey = generateKey();
+        writeKeyFile(localApiKey);
+      } catch (err) {
+        localApiKey = null;
+        server.close();
+        return reject(new Error(`could not write local API key: ${err.message}`));
+      }
+      resolve(server);
+    });
+  });
+}
+
+module.exports = { renderTwiml, startServer, PUBLIC_ROUTES };
 
 if (require.main === module) {
   requireEnv();
-  server.listen(PORT, HOST, () => {
+  startServer().then(() => {
     console.log(
       `[token-server] listening on http://${HOST}:${PORT} ` +
         `(account ${TWILIO_ACCOUNT_SID.slice(0, 6)}…)`
+    );
+    console.log(
+      `[token-server] public (tunnel) routes: ${[...PUBLIC_ROUTES].join(' ')}` +
+        ` · private routes need the local API key in ${keyFilePath()}`
     );
     console.log(
       `[token-server] sms store: ${SMS_STORE_PATH}` +
@@ -650,5 +739,10 @@ if (require.main === module) {
           'outbound status will stay at queued/sent)'
       );
     }
+  }, (err) => {
+    console.error(
+      `[token-server] could not start on http://${HOST}:${PORT}: ${err.message}`
+    );
+    process.exit(1);
   });
 }

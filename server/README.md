@@ -20,8 +20,9 @@ XSS-equivalent renderer bug could exfiltrate it. Instead:
 
 The auth token still needs to be on disk somewhere for **this** server to
 read. That's the same risk profile as Twilio Functions or any other
-server-side integration. We mitigate by binding to `127.0.0.1` only — the
-server refuses any non-loopback connection.
+server-side integration. We mitigate by binding to `127.0.0.1` only and by
+keeping every route except Twilio's webhooks private — see
+[Public and private routes](#public-and-private-routes).
 
 ## Setup
 
@@ -62,6 +63,48 @@ TWILIO_CALLER_ID=+1xxxxxxxxxx
 OPERATOR_IDENTITY=operator-username
 ```
 
+## Public and private routes
+
+A tunnel such as ngrok forwards the internet to this server **from
+127.0.0.1**, so "the connection is local" does not mean "the request is
+from the Operator app". The server therefore splits its routes:
+
+- **Public** (`PUBLIC_ROUTES` in `server.js`): `/health`, `/twiml`, `/`,
+  `/sms/inbound`, `/sms/status`. These are what Twilio (and your tunnel
+  health check) must reach, and their responses carry no secrets or
+  message history.
+- **Private**: everything else — today `/token`, `/sms/send` and
+  `/sms/conversations`. A new route is private unless it is added to
+  `PUBLIC_ROUTES` on purpose. A private request must:
+  1. arrive on a loopback connection (else `403 local only`);
+  2. carry no proxy/tunnel forwarding headers (`Forwarded`, `Via`,
+     `X-Forwarded-For`/`-Host`/`-Proto`, `X-Real-IP`, `CF-Connecting-IP`)
+     and a loopback `Host` (`127.0.0.1`, `localhost`, `[::1]`) — else
+     `403 private route: not reachable through a tunnel or proxy`;
+  3. send this run's local API key as `Authorization: Bearer <key>` —
+     else `401 missing or invalid local API key`.
+
+The local API key is generated fresh on every start and written, once the
+server owns its port, to `server/.local-api-key` with mode `0600`
+(override with `OPERATOR_LOCAL_API_KEY_FILE`; the Electron main process
+honors the same variable, so set it for both). The app's token and SMS
+brokers read the file on every request, so restarting the server needs no
+app restart. Tunnels can be configured to strip forwarding headers; the key
+is what keeps a tunneled request out regardless, and it also stops a web
+page in your browser from posting to `127.0.0.1:5050`.
+
+After updating to this version, restart both the token server and the
+app: an app started before the update does not send the key, so its token
+and SMS requests get `401` until it restarts.
+
+To call a private route by hand:
+
+```bash
+curl -X POST http://127.0.0.1:5050/token \
+  -H "Authorization: Bearer $(cat server/.local-api-key)" \
+  -H 'Content-Type: application/json' -d '{"identity":"operator"}'
+```
+
 ## Endpoints
 
 ### `GET /health`
@@ -70,6 +113,8 @@ Returns `{ok: true, ts: <epoch_ms>}`. Useful for the renderer to verify
 the server is up before requesting a token.
 
 ### `POST /token`
+
+Private: needs the local API key (see above).
 
 Request:
 
@@ -127,13 +172,17 @@ unguessable, and the response contains no secrets.
 
 ## Security notes
 
-- `/token` only binds to `127.0.0.1` and refuses non-loopback connections
-  — it returns signed JWTs and must never leak.
-- `/twiml` is the only public endpoint. There is no auth, but the
-  response contains only TwiML — no secrets, no PII — so the worst
-  case from URL exposure is "someone can make calls billed to your
-  account" which is the same risk as the TwiML App URL being public
-  anyway.
+- `/token`, `/sms/send` and `/sms/conversations` are private: they return
+  signed JWTs, send billable SMS and return message history, and must never
+  be reachable through the tunnel. The server binds to `127.0.0.1` and
+  checks every private request as described in
+  [Public and private routes](#public-and-private-routes).
+- `/twiml`, `/sms/inbound` and `/sms/status` are public. There is no auth
+  on them yet (Twilio signature verification is still to do), but their
+  responses contain only TwiML or `{ ok }` — no secrets, no history — so
+  the worst case from URL exposure is "someone can make calls billed to
+  your account" (the same risk as the TwiML App URL being public anyway)
+  or forged inbound messages and delivery updates.
 - If you're using ngrok, the random subdomain is your only auth. If you
   want a hard second factor, put the endpoint behind a path secret
   (e.g. `/twiml/RANDOM_HEX`) and configure that in the Twilio console.

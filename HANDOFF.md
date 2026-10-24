@@ -93,6 +93,12 @@ curl -H "ngrok-skip-browser-warning: true" https://YOUR-DOMAIN.ngrok-free.app/he
 # expect: {"ok":true,"ts":...}
 ```
 
+**Only the webhooks answer through the tunnel.** `/twiml`, `/`, `/sms/inbound`, `/sms/status` and `/health` are the public routes (`PUBLIC_ROUTES` in `server/server.js`). Every other route is private: the tunnel connects from 127.0.0.1, so the server also refuses any private request that carries forwarding headers (`X-Forwarded-*`, `Forwarded`, `Via`, `CF-Connecting-IP`) or a non-loopback `Host`, and requires the local API key the server writes to `server/.local-api-key` on each start (only the Electron main process reads it). Through the tunnel:
+```bash
+curl -X POST https://YOUR-DOMAIN.ngrok-free.app/token
+# expect: 403 {"error":"private route: not reachable through a tunnel or proxy"}
+```
+
 If you get NXDOMAIN from your own terminal, your local DNS is broken — Twilio uses its own DNS, so this doesn't block the test. Use 1.1.1.1 to confirm globally:
 ```bash
 nslookup YOUR-DOMAIN.ngrok-free.app 1.1.1.1
@@ -180,10 +186,10 @@ To get the `sent` → `delivered` / `failed` badge updates in the panel, the ser
 
         ┌────────────────────────┐
         │ server/server.js       │  127.0.0.1:5050
-        │  POST /token → JWT     │  (token: localhost only)
+        │  POST /token → JWT     │  (token: private, local API key)
         │  GET|POST /twiml → XML │  (twiml: public via ngrok)
-        │  POST /sms/send        │  (sms/send: localhost only)
-        │  GET /sms/conversations│  (sms/list: localhost only)
+        │  POST /sms/send        │  (sms/send: private, local API key)
+        │  GET /sms/conversations│  (sms/list: private, local API key)
         │  POST /sms/inbound     │  (sms/inbound: public via ngrok)
         │  POST /sms/status      │  (sms/status: public via ngrok)
         │  GET /health           │
@@ -216,7 +222,7 @@ Two channel types:
 ### Token broker
 
 `main/services/tokenBroker.js` has two modes:
-1. **Default:** POST to `TOKEN_BACKEND_URL` (defaults to `http://127.0.0.1:5050/token`) and return the JWT. Used in dev with our Node server.
+1. **Default:** POST to `TOKEN_BACKEND_URL` (defaults to `http://127.0.0.1:5050/token`) and return the JWT. Used in dev with our Node server. For a loopback URL the request carries the server's local API key (`main/services/localApiAuth.js`); a remote backend never receives it.
 2. **Direct mint:** if `TWILIO_ACCOUNT_SID` + `TWILIO_API_KEY` + `TWILIO_API_SECRET` + `TWILIO_TWIML_APP_SID` are set in the **main-process** env, sign the JWT in-process using `@twilio/voice-sdk` (lazy-loaded). Skips the network round-trip.
 
 ---
@@ -232,7 +238,9 @@ Two channel types:
 | `main/services/config.js` | Plaintext non-secret config (SID, identity). |
 | `main/services/tokenBroker.js` | Fetches/mints capability tokens. |
 | `main/services/smsBroker.js` | HTTP client to local server's `/sms/*` endpoints. Mirrors tokenBroker pattern. |
-| `server/server.js` | Local Node service. `POST /token` (localhost), `GET\|POST /twiml` (public via ngrok), `POST /sms/send` + `GET /sms/conversations` (localhost), `POST /sms/inbound` + `POST /sms/status` (public via ngrok), `GET /health`. |
+| `main/services/localApiAuth.js` | Adds the local server's API key (`Authorization: Bearer …`) to the brokers' requests to a loopback server, read fresh per request. |
+| `server/server.js` | Local Node service. `POST /token` (private), `GET\|POST /twiml` (public via ngrok), `POST /sms/send` + `GET /sms/conversations` (private), `POST /sms/inbound` + `POST /sms/status` (public via ngrok), `GET /health` (public). Private routes refuse tunneled/proxied requests and need the local API key (`checkPrivateAccess`); any route not in `PUBLIC_ROUTES` is private. |
+| `server/localApiKey.js` | Generates the per-start local API key and writes it 0600 to `server/.local-api-key` (or `OPERATOR_LOCAL_API_KEY_FILE`) once the server owns its port. |
 | `server/smsStore.js` | JSON-backed conversation store. E.164 keyed, 500-msg cap, atomic write. Exposes `updateMessageBySid` for status callbacks. |
 | `server/.env.example` | Documents the required env vars (now includes optional `TWILIO_SMS_FROM` and `OPERATOR_IDENTITY`). |
 | `server/README.md` | Server-specific setup, security notes. |
@@ -311,7 +319,7 @@ Two channel types:
 2. `SmsPanel` calls `send({ to, body })` from `useSms`
 3. `smsService.send` invokes `window.operator.sms.send(...)` via the preload bridge
 4. Main process IPC handler `sms:send` calls `smsBroker.sendMessage(...)`
-5. Broker POSTs to `http://127.0.0.1:5050/sms/send` with `{ to, body }`
+5. Broker POSTs to `http://127.0.0.1:5050/sms/send` with `{ to, body }` and the local API key as a bearer token
 6. `server.js` `handleSmsSend`:
    - Persists a placeholder message locally with status `sending` (so the UI sees it immediately, even if Twilio is slow)
    - Calls Twilio's REST `messages.create({ to, from, body })` using the existing `TWILIO_API_KEY` + `TWILIO_API_SECRET`
@@ -522,6 +530,7 @@ node --check server.js        # Syntax check
 | `server/.env` | `SMS_PUBLIC_BASE_URL` | **Optional.** If `SMS_STATUS_CALLBACK_URL` is unset, the server derives `<base>/sms/status` from this. |
 | main process | `TOKEN_BACKEND_URL` | override default `http://127.0.0.1:5050/token` |
 | main process | `SMS_BACKEND_URL` | **Optional.** Override default `http://127.0.0.1:5050` for the SMS broker. |
+| `server/.env` + main process | `OPERATOR_LOCAL_API_KEY_FILE` | **Optional.** Where the server writes, and the main process reads, the per-start local API key. Default `server/.local-api-key`. If you set it, set the same path for both processes. |
 | main process | `TWILIO_*` (4 vars) | enable direct-mint mode in `tokenBroker.js` (currently broken — see §8d) |
 
 ---
