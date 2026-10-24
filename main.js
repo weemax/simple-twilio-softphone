@@ -155,10 +155,55 @@ function registerIpc() {
       const data = await smsBroker.sendMessage({
         to: payload.to,
         body: payload.body,
+        media: payload.media,
       });
       return { ok: true, ...(data || {}) };
     } catch (err) {
       return { ok: false, error: err.message, status: err.outcome || 'unknown' };
+    }
+  });
+  // Photos: attached to a draft, previewed, removed and checked locally. Only
+  // sms:send with the photo ids sends anything to Twilio.
+  ipcMain.handle('sms:attach', async (_e, payload) => {
+    try {
+      if (!payload || typeof payload !== 'object') return { ok: false, error: 'payload required' };
+      const data = await smsBroker.attachPhoto({ name: payload.name, bytes: payload.bytes });
+      return { ok: true, ...(data || {}) };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+  ipcMain.handle('sms:media', async (_e, payload) => {
+    try {
+      if (!payload || typeof payload !== 'object') return { ok: false, error: 'payload required' };
+      const photo = await smsBroker.readPhoto(payload.id);
+      return { ok: true, type: photo.type, bytes: photo.bytes };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+  ipcMain.handle('sms:media-discard', async (_e, payload) => {
+    try {
+      if (!payload || typeof payload !== 'object') return { ok: false, error: 'payload required' };
+      return { ok: true, ...((await smsBroker.discardPhoto(payload.id)) || {}) };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+  ipcMain.handle('sms:media-prune', async (_e, payload) => {
+    try {
+      if (!payload || typeof payload !== 'object') return { ok: false, error: 'payload required' };
+      return { ok: true, ...((await smsBroker.prunePhotos(payload.keep)) || {}) };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+  ipcMain.handle('sms:media-policy', async (_e, payload) => {
+    try {
+      if (!payload || typeof payload !== 'object') return { ok: false, error: 'payload required' };
+      return { ok: true, ...((await smsBroker.photoPolicy(payload.to)) || {}) };
+    } catch (err) {
+      return { ok: false, error: err.message };
     }
   });
   ipcMain.handle('sms:me', async () => {

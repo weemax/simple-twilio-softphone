@@ -117,6 +117,10 @@ export const emptyWorkspace = () => ({
   view: 'messages',
   contacts: [],
   drafts: {},
+  // Photos attached to each recipient's draft, as the local service described
+  // them ({ id, type, bytes, width, height, name }). The bytes stay in the
+  // service's photo folder; nothing is uploaded until Send.
+  attachments: {},
   readIds: {},
   archived: {},
   scroll: {},
@@ -135,3 +139,39 @@ export const unreadCount = (c, data) =>
 // Version-1 metadata from an earlier session may hold one attempt rather than a list.
 export const uncertainAttempts = (value) =>
   value ? (Array.isArray(value) ? value : [value]) : [];
+
+// Photos (accepted TWP-9 piece 4). The limits mirror server/photoPolicy.js, which
+// enforces them; the composer reads them from the service's policy answer and
+// uses these only until that answer arrives.
+export const PHOTO_LIMITS = { maxPhotos: 10, maxBytes: 5 * 1024 * 1024 };
+
+export const photoLabel = (count) =>
+  count === 1 ? 'Photo' : `${count} photos`;
+
+// What a conversation row or notification says for a message: its text, or
+// for a photo-only message the photos.
+export const messageSummary = (message) =>
+  message?.body || (message?.media?.length ? photoLabel(message.media.length) : '');
+
+export function utf8Length(text) {
+  let bytes = 0;
+  for (const c of text) {
+    const code = c.codePointAt(0);
+    bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+  }
+  return bytes;
+}
+
+// Text and photos together, in bytes: the figure the 5 MB limit applies to.
+export const messageBytes = (text, photos) =>
+  utf8Length(text) + photos.reduce((sum, p) => sum + p.bytes, 0);
+
+export const formatSize = (bytes) =>
+  bytes < 1024 * 1024
+    ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+    : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+
+// The same message to the same number: the same words and the same photos.
+export const sameContent = (a, b) =>
+  a.body === b.body &&
+  (a.media || []).join() === (b.media || []).join();

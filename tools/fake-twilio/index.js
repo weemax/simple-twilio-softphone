@@ -24,6 +24,7 @@ function startFakeTwilio({ accountSid = ACCOUNT_SID, authToken = AUTH_TOKEN } = 
     apps: [],
     keys: [], // { sid, secret, friendly_name }
     services: [], // { sid, friendly_name, numberSids: [] }
+    media: new Map(), // pathname -> { bytes, type, status, redirectTo, auth }
   };
   const requests = [];
   let unreachable = false;
@@ -68,6 +69,21 @@ function startFakeTwilio({ accountSid = ACCOUNT_SID, authToken = AUTH_TOKEN } = 
     return s;
   }
 
+  // A photo of an incoming message, as the media URL in a webhook points to it.
+  // `redirectTo` is a full URL to redirect to instead of serving the bytes.
+  // `cdn: true` redirects to a /cdn/ path on this fake that serves the bytes
+  // without credentials, as Twilio's real media CDN does. Resolves the media
+  // URL (and the CDN one) once the fake is listening: see addMedia below.
+  // `gate` is a promise the fake waits for before answering, so a test can
+  // hold a download open and see the photo while it is still pending.
+  function registerMedia({ bytes = Buffer.alloc(0), type = 'image/jpeg', status = 200, redirectTo = null, cdn = false, gate = null, accountSid: sid = accountSid } = {}) {
+    const mediaPath = `/2010-04-01/Accounts/${sid}/Messages/MM${hex(16)}/Media/ME${hex(16)}`;
+    const cdnPath = cdn ? `/cdn/${hex(16)}` : null;
+    state.media.set(mediaPath, { bytes, type, status, redirectTo, cdnPath, gate, auth: true });
+    if (cdnPath) state.media.set(cdnPath, { bytes, type, status, redirectTo: null, cdnPath: null, gate, auth: false });
+    return { mediaPath, cdnPath };
+  }
+
   function authorised(header) {
     const m = /^Basic (.+)$/.exec(header || '');
     if (!m) return false;
@@ -89,11 +105,30 @@ function startFakeTwilio({ accountSid = ACCOUNT_SID, authToken = AUTH_TOKEN } = 
     if (unreachable) return req.socket.destroy();
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
-    req.on('end', () => {
+    req.on('end', async () => {
       const url = new URL(req.url, 'http://fake');
       const form = Object.fromEntries(new URLSearchParams(Buffer.concat(chunks).toString('utf8')));
-      const entry = { method: req.method, path: url.pathname, form, auth: authorised(req.headers.authorization) };
+      const entry = {
+        method: req.method,
+        path: url.pathname,
+        form,
+        auth: authorised(req.headers.authorization),
+        hasAuthHeader: Boolean(req.headers.authorization),
+      };
       requests.push(entry);
+      const served = state.media.get(url.pathname);
+      if (served && req.method === 'GET') {
+        if (served.auth && !entry.auth) return send(res, 401, { code: 20003, message: 'Authenticate', status: 401 });
+        if (served.gate) await served.gate;
+        const origin = `http://127.0.0.1:${server.address().port}`;
+        const location = served.cdnPath ? origin + served.cdnPath : served.redirectTo;
+        if (location) {
+          res.writeHead(307, { Location: location });
+          return res.end();
+        }
+        res.writeHead(served.status, { 'Content-Type': served.type, 'Content-Length': served.bytes.length });
+        return res.end(served.bytes);
+      }
       const failure = failures.findIndex((f) => f.method === req.method && f.pattern.test(url.pathname));
       if (failure >= 0) {
         const f = failures[failure];
@@ -205,6 +240,11 @@ function startFakeTwilio({ accountSid = ACCOUNT_SID, authToken = AUTH_TOKEN } = 
         addApp,
         addKey,
         addService,
+        addMedia: (spec) => {
+          const { mediaPath, cdnPath } = registerMedia(spec);
+          const origin = `http://127.0.0.1:${server.address().port}`;
+          return { url: origin + mediaPath, cdnUrl: cdnPath ? origin + cdnPath : null };
+        },
         // Requests that changed something (everything but GET).
         writes: () => requests.filter((r) => r.method !== 'GET'),
         clearRequests: () => requests.splice(0),

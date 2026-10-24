@@ -76,6 +76,24 @@ outcomes and that the real bridge surfaces them. This is deliberately not a test
 of `npm run phone`'s graceful process shutdown; `src/launcher.test.js` covers that. It removes its disposable
 profile/database after reading the results, on success or failure.
 
+## Photo messages through actual Electron
+
+With the renderer fixture still running:
+
+```sh
+node tools/workspace-ui/desktop-photos-journey.cjs
+```
+
+It starts the fictional Twilio (`tools/fake-twilio`, which can also serve incoming media) and
+launches the isolated Electron profile with the real preload, IPC, brokers, private service,
+media store and workspace file. The Twilio SDK's send is stubbed by `desktop.cjs`, which records
+the parameters it was handed (photo links included) in the disposable profile. The journey
+attaches, previews, restarts abruptly, removes one photo, sends with a caption, receives a
+signed webhook with three photos (one served through a CDN redirect, one GIF, one from an
+unapproved address), opens the larger view, checks a Jamaican number's notice, a confirmed
+failure, an unknown result and clearing, reading the link routes and the photo folder directly.
+Nothing reaches a real provider, tunnel or Keychain.
+
 ## Real-speed draft demonstration
 
 For video capture only, install Playwright's recording helper into the scratch
