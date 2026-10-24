@@ -1,252 +1,407 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { TwilioProvider, useTwilio } from './contexts/TwilioContext';
-import { SmsProvider } from './contexts/SmsContext';
+import { SmsProvider, useSms } from './contexts/SmsContext';
+import { WorkspaceProvider, useWorkspace } from './workspace/WorkspaceContext';
+import { normalizePhone, unreadCount } from './workspace/model';
+import { Contacts } from './workspace/Contacts';
+import { ConfirmDialog } from './workspace/ConfirmDialog';
+import { formatNumber } from './formatNumber';
 import { AccountConfig } from './components/AccountConfig/AccountConfig';
 import { Dialpad } from './components/Dialpad/Dialpad';
-import { CallControls } from './components/CallControls/CallControls';
 import { CallScreen } from './components/CallScreen/CallScreen';
 import { SmsPanel } from './components/SmsPanel/SmsPanel';
 import './App.css';
 import './components/SmsPanel/SmsPanel.css';
-
-function StatusBar({ snapshot, accountSid }) {
-  let label;
-  let tone = 'idle';
-  if (snapshot.error) {
-    label = `Error: ${snapshot.error}`;
-    tone = 'error';
-  } else if (snapshot.currentCall) {
-    label = `In call — ${snapshot.currentCall.status}`;
-    tone = snapshot.currentCall.status === 'ringing' ? 'ringing' : 'active';
-  } else if (snapshot.incomingCall) {
-    label = 'Incoming call';
-    tone = 'ringing';
-  } else if (snapshot.state === 'registered') {
-    label = `Ready${accountSid ? '' : ' · account not configured'}`;
-    tone = 'ready';
-  } else if (snapshot.state === 'registering') {
-    label = 'Connecting…';
-    tone = 'busy';
-  } else if (snapshot.state === 'offline' || snapshot.state === 'unregistered') {
-    label = 'Offline';
-    tone = 'idle';
-  } else {
-    label = snapshot.state || 'Idle';
-    tone = 'idle';
-  }
-  return <div className={`status-bar ${tone}`}>{label}</div>;
-}
+import './workspace/Workspace.css';
 
 function MainPanel() {
-  const {
-    snapshot,
-    placeCall,
-    hangup,
-    acceptIncoming,
-    rejectIncoming,
-    toggleMute,
-    sendDigits,
-    register,
-  } = useTwilio();
-
-  const [number, setNumber] = useState('');
-  const [configured, setConfigured] = useState(false);
-  const [accountSid, setAccountSid] = useState(null);
-  const [identity, setIdentity] = useState(null);
-
-  // Check configured state on mount.
-  useEffect(() => {
-    (async () => {
-      // Read whole config so we can sanity-check shape even if individual
-      // key reads ever return a non-string.
+  const voice = useTwilio(),
+    { snapshot: sms } = useSms();
+  const { data, update, ready, saveError, nameFor } = useWorkspace();
+  const { snapshot, placeCall, register } = voice;
+  const [config, setConfig] = useState(null),
+    [number, setNumber] = useState(''),
+    [callsView, setCallsView] = useState('dialer');
+  const [confirmation, setConfirmation] = useState(null),
+    [callError, setCallError] = useState(''),
+    [calling, setCalling] = useState(false),
+    [settingsView, setSettingsView] = useState('connection');
+  const readConfig = useCallback(async () => {
+    try {
       const cfg = await window.operator.config.get();
-      const sid =
-        cfg && typeof cfg === 'object' ? cfg.accountSid : cfg?.accountSid;
-      const ident =
-        cfg && typeof cfg === 'object' ? cfg.identity : cfg?.identity;
-      const sidStr = typeof sid === 'string' ? sid : null;
-      const identStr = typeof ident === 'string' ? ident : null;
-      setAccountSid(sidStr);
-      setIdentity(identStr);
-      setConfigured(Boolean(sidStr && identStr));
-    })();
-  }, []);
-
-  // When configured and we have identity, register the Device.
-  useEffect(() => {
-    if (configured && identity) {
-      register(identity).catch((err) => {
-        // Errors already surface in snapshot.error.
-        console.warn('register failed:', err.message);
-      });
+      setConfig(cfg || {});
+    } catch (_) {
+      setConfig({});
     }
+  }, []);
+  useEffect(() => {
+    readConfig();
+  }, [readConfig]);
+  const accountSid =
+      typeof config?.accountSid === 'string' ? config.accountSid : '',
+    identity = typeof config?.identity === 'string' ? config.identity : '';
+  const configured = Boolean(accountSid && identity);
+  useEffect(() => {
+    if (configured) register(identity).catch(() => {});
   }, [configured, identity, register]);
-
-  // Send dialpad digits to an active call (in-call DTMF).
   useEffect(() => {
-    if (
-      snapshot.currentCall &&
-      (snapshot.currentCall.status === 'open' ||
-        snapshot.currentCall.status === 'connected')
-    ) {
-      // No-op: handled in onKeyPress below so digits only go out when tapped
-      // during an active call. This effect is here in case future logic
-      // needs to react to call-state changes.
-    }
-  }, [snapshot.currentCall]);
-
-  const handleCall = useCallback(() => {
-    if (!number) return;
-    placeCall(number).catch((err) => {
-      console.warn('placeCall failed:', err.message);
-    });
-  }, [number, placeCall]);
-
-  const handleKeyPress = useCallback(
-    (digit) => {
-      if (
-        snapshot.currentCall &&
-        (snapshot.currentCall.status === 'open' ||
-          snapshot.currentCall.status === 'connected')
-      ) {
-        sendDigits(digit);
-      }
-    },
-    [snapshot.currentCall, sendDigits]
+    if (!ready || !snapshot.lastCall) return;
+    update((d) =>
+      d.recentCalls.some((c) => c.id === snapshot.lastCall.id)
+        ? d
+        : { ...d, recentCalls: [snapshot.lastCall, ...d.recentCalls] },
+    );
+  }, [snapshot.lastCall, ready, update]);
+  const navigate = useCallback(
+    (view) => update((d) => ({ ...d, view })),
+    [update],
   );
-
-  const handleConfigured = useCallback(() => {
-    setConfigured(true);
-  }, []);
-
-  const handleCancelConfigure = useCallback(() => {
-    // Go back to the dialer without re-saving. Used when the user opened
-    // the form via "Reconfigure" but didn't want to change anything.
-    setConfigured(true);
-  }, []);
-
-  const showCallScreen = snapshot.currentCall || snapshot.incomingCall;
-  // 'voice' = dialer or call screen; 'messages' = sms panel.
-  // An incoming or active call always wins — we route to call screen
-  // even if the user is on the messages tab.
-  const [view, setView] = useState('voice');
-  const effectiveView = showCallScreen ? 'voice' : view;
-
+  const openText = useCallback(
+    (number) =>
+      update((d) => ({
+        ...d,
+        view: 'messages',
+        selected: number,
+        archived: { ...d.archived, [number]: false },
+      })),
+    [update],
+  );
+  useEffect(
+    () =>
+      window.operator?.on?.('sms:open', (payload) => {
+        const n = normalizePhone(payload?.number);
+        if (n) openText(n);
+      }),
+    [openText],
+  );
+  const requestCall = useCallback(
+    (value) => {
+      const n =
+        normalizePhone(value) ||
+        (/^[a-z][a-z0-9_-]{0,63}$/i.test(value) ? value : null);
+      if (!n) {
+        setCallError(
+          'Include + and the country code, or enter a Client identity.',
+        );
+        return;
+      }
+      setCallError('');
+      setConfirmation({ number: n, name: nameFor(n) });
+    },
+    [nameFor],
+  );
+  async function confirmCall() {
+    if (
+      !confirmation ||
+      calling ||
+      snapshot.connecting ||
+      snapshot.currentCall ||
+      snapshot.incomingCall
+    )
+      return;
+    setCalling(true);
+    setCallError('');
+    const destination = confirmation.number;
+    setConfirmation(null);
+    try {
+      await placeCall(destination);
+    } catch (e) {
+      setCallError(e.message || 'The call could not start.');
+    } finally {
+      setCalling(false);
+    }
+  }
+  if (!ready || !config)
+    return (
+      <div className="app">
+        <p role="status">Opening your workspace…</p>
+        {saveError && <p role="alert">{saveError}</p>}
+      </div>
+    );
+  const view = ['messages', 'calls', 'contacts', 'settings'].includes(data.view)
+    ? data.view
+    : 'messages';
+  const activeCall = snapshot.currentCall || snapshot.incomingCall;
+  const pendingIncoming =
+    !snapshot.currentCall && Boolean(snapshot.incomingCall);
+  const direction =
+    String(activeCall?.direction || '').toUpperCase() === 'INCOMING'
+      ? 'incoming'
+      : 'outgoing';
+  const other = direction === 'incoming' ? activeCall?.from : activeCall?.to;
+  const blocked =
+    snapshot.state !== 'registered' ||
+    Boolean(activeCall) ||
+    snapshot.connecting ||
+    calling;
+  const unread = data.seeded
+    ? (sms.conversations || []).reduce((n, c) => n + unreadCount(c, data), 0)
+    : 0;
   return (
-    <div className="app">
+    <div className="app workspace-app">
       <header className="app-header">
         <h1>Operator</h1>
         <span className="subtitle">Twilio Softphone</span>
-        {configured && accountSid && identity && (
-          <nav className="app-tabs" aria-label="View">
-            <button
-              type="button"
-              className={`app-tab${effectiveView === 'voice' ? ' active' : ''}`}
-              onClick={() => setView('voice')}
-            >
-              Voice
-            </button>
-            <button
-              type="button"
-              className={`app-tab${effectiveView === 'messages' ? ' active' : ''}`}
-              onClick={() => setView('messages')}
-            >
-              Messages
-            </button>
-          </nav>
-        )}
         <span className="spacer" />
-        <button
-          type="button"
-          className="link"
-          onClick={() => setConfigured(false)}
-        >
-          {configured ? 'Reconfigure' : 'Configure'}
-        </button>
-      </header>
-
-      <StatusBar snapshot={snapshot} accountSid={accountSid} />
-
-      <main className="app-main">
-        {!configured || !accountSid || !identity ? (
-          <AccountConfig
-            onConfigured={handleConfigured}
-            onCancel={
-              // Only offer Cancel if there's already something saved —
-              // otherwise Cancel is meaningless and Save is the only way out.
-              accountSid && identity ? handleCancelConfigure : undefined
-            }
-          />
-        ) : showCallScreen ? (
-          (() => {
-            // An unaccepted inbound call lives only in `incomingCall`;
-            // once answered (or when we place an outbound call) it becomes
-            // `currentCall`. Derive direction from Twilio's own Call flag
-            // rather than which slot it's in, so an answered inbound call
-            // stays labeled "Incoming" and shows the caller's number.
-            const activeCall = snapshot.currentCall || snapshot.incomingCall;
-            const isIncomingPending =
-              !snapshot.currentCall && Boolean(snapshot.incomingCall);
-            const dir =
-              String(activeCall?.direction || '').toUpperCase() === 'INCOMING'
-                ? 'incoming'
-                : 'outgoing';
-            return (
-              <CallScreen
-                call={{ ...activeCall, direction: dir }}
-                incoming={isIncomingPending}
-                onAccept={acceptIncoming}
-                onReject={rejectIncoming}
-                onHangup={hangup}
-                onMute={toggleMute}
-                onSendDigit={sendDigits}
-                muted={activeCall?.muted || false}
-              />
-            );
-          })()
-        ) : effectiveView === 'messages' ? (
-          <SmsPanel />
-        ) : (
-          <div className="dialer">
-            <Dialpad
-              value={number}
-              onChange={setNumber}
-              onKeyPress={handleKeyPress}
-              disabled={snapshot.state !== 'registered'}
-            />
-            <CallControls
-              callState={
-                snapshot.currentCall
-                  ? snapshot.currentCall.status
-                  : 'idle'
-              }
-              hasNumber={Boolean(number)}
-              disabled={snapshot.state !== 'registered'}
-              onCall={handleCall}
-              onHangup={hangup}
-              onMute={toggleMute}
-              muted={snapshot.currentCall?.muted || false}
-              incoming={Boolean(snapshot.incomingCall)}
-              onAccept={acceptIncoming}
-              onReject={rejectIncoming}
-            />
-            {snapshot.state !== 'registered' && (
-              <p className="muted small">
-                {snapshot.state === 'registering'
-                  ? 'Connecting to Twilio…'
-                  : snapshot.error
-                  ? `Device error: ${snapshot.error}`
-                  : 'Device is not ready.'}
-              </p>
-            )}
-          </div>
+        {sms.smsFrom && (
+          <span className="muted small">
+            Your number {formatNumber(sms.smsFrom)}
+          </span>
         )}
-      </main>
-
-      <footer className="app-footer">
-        <span className="muted small">
-          {identity ? `Identity: ${identity}` : ''}
+      </header>
+      <div className="status-bar" role="status">
+        <span>
+          Voice: {snapshot.connecting ? 'connecting call' : snapshot.state}
         </span>
+        <span>
+          Messages:{' '}
+          {sms.lastError
+            ? 'updates unavailable'
+            : sms.hydrated
+              ? 'connected'
+              : 'loading'}
+        </span>
+        {!configured && <span>Account needs configuration</span>}
+      </div>
+      {saveError && (
+        <p className="alert" role="alert">
+          {saveError}
+        </p>
+      )}
+      <div className="workspace-layout">
+        <nav className="workspace-nav" aria-label="Main navigation">
+          {['messages', 'calls', 'contacts', 'settings'].map((v) => (
+            <button
+              key={v}
+              type="button"
+              aria-current={view === v ? 'page' : undefined}
+              className={view === v ? 'active' : ''}
+              onClick={() => navigate(v)}
+            >
+              {v[0].toUpperCase() + v.slice(1)}
+              {v === 'messages' && unread > 0 && (
+                <span
+                  className="badge"
+                  aria-label={`${unread} unread messages`}
+                >
+                  {unread}
+                </span>
+              )}
+              {v === 'settings' && !configured && (
+                <span className="badge">!</span>
+              )}
+            </button>
+          ))}
+        </nav>
+        <main className="app-main workspace-main">
+          {callError && (
+            <p className="alert" role="alert">
+              {callError}
+            </p>
+          )}
+          <div className="messages-view" hidden={view !== 'messages'}>
+            <SmsPanel
+              active={view === 'messages' && !pendingIncoming}
+              onCall={requestCall}
+            />
+          </div>
+          <div hidden={view !== 'contacts'}>
+            <Contacts onText={openText} onCall={requestCall} />
+          </div>
+          <section
+            className="workspace-page calls-page"
+            hidden={view !== 'calls'}
+            aria-label="Calls"
+          >
+            <h2>Calls</h2>
+            <div className="button-row subnav">
+              {['dialer', 'recents'].map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  aria-pressed={callsView === v}
+                  className={callsView === v ? 'active' : ''}
+                  onClick={() => setCallsView(v)}
+                >
+                  {v === 'dialer' ? 'Dialer' : 'Recents'}
+                </button>
+              ))}
+            </div>
+            <div className="dialer" hidden={callsView !== 'dialer'}>
+              <Dialpad
+                value={number}
+                onChange={setNumber}
+                disabled={Boolean(activeCall) || calling}
+              />
+              <button
+                type="button"
+                className="primary dial-call"
+                onClick={() => requestCall(number)}
+                disabled={!number.trim()}
+              >
+                Review call
+              </button>
+              {snapshot.state !== 'registered' && (
+                <p className="muted small">
+                  Calling is unavailable until the voice device registers. You
+                  can still use contacts and stored messages.
+                </p>
+              )}
+            </div>
+            <div hidden={callsView !== 'recents'}>
+              <p className="muted small">
+                Only calls observed by this app appear here, not calls missed
+                while it was closed.
+              </p>
+              {!data.recentCalls.length && <p>No recent calls yet.</p>}
+              {data.recentCalls.map((c) => (
+                <article className="panel recent-call" key={c.id}>
+                  <div>
+                    <strong>
+                      {nameFor(c.number) || formatNumber(c.number)}
+                    </strong>
+                    {nameFor(c.number) && (
+                      <div className="muted small">
+                        {formatNumber(c.number)}
+                      </div>
+                    )}
+                    <p>
+                      {c.direction} · {c.outcome} ·{' '}
+                      {new Date(c.at).toLocaleString()}
+                      {c.duration ? ` · ${c.duration}s` : ''}
+                    </p>
+                  </div>
+                  <div className="button-row">
+                    <button type="button" onClick={() => requestCall(c.number)}>
+                      Call
+                    </button>
+                    {normalizePhone(c.number) && (
+                      <button type="button" onClick={() => openText(c.number)}>
+                        Text
+                      </button>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+          <section
+            className="workspace-page"
+            hidden={view !== 'settings'}
+            aria-label="Settings"
+          >
+            <h2>Settings</h2>
+            <div className="button-row subnav">
+              <button
+                type="button"
+                aria-pressed={settingsView === 'connection'}
+                onClick={() => setSettingsView('connection')}
+              >
+                Connection
+              </button>
+              <button
+                type="button"
+                aria-pressed={settingsView === 'account'}
+                onClick={() => setSettingsView('account')}
+              >
+                Twilio account
+              </button>
+            </div>
+            {settingsView === 'connection' ? (
+              <div className="panel">
+                <h3>Connection</h3>
+                <dl className="connection-list">
+                  <dt>Voice registration</dt>
+                  <dd>{snapshot.state}</dd>
+                  <dt>Message updates</dt>
+                  <dd>
+                    {sms.lastError ||
+                      (sms.hydrated
+                        ? 'Connected to the local service'
+                        : 'Loading')}
+                  </dd>
+                  <dt>SMS sender</dt>
+                  <dd>
+                    {formatNumber(sms.smsFrom || sms.callerId) ||
+                      'Not configured'}
+                  </dd>
+                  <dt>Account configuration</dt>
+                  <dd>
+                    {configured
+                      ? 'Saved locally; provider setup remains manual'
+                      : 'Not configured'}
+                  </dd>
+                  <dt>Public tunnel</dt>
+                  <dd>
+                    Not checked by this version. One-command startup and the
+                    automated setup follow separately.
+                  </dd>
+                </dl>
+                {snapshot.error && <p className="error">{snapshot.error}</p>}
+              </div>
+            ) : (
+              <>
+                <p className="muted small">
+                  This is the existing account form. Reviewed automatic Twilio
+                  setup follows in its separate accepted piece.
+                </p>
+                <AccountConfig
+                  onConfigured={readConfig}
+                  onCancel={() => setSettingsView('connection')}
+                />
+              </>
+            )}
+          </section>
+        </main>
+      </div>
+      {activeCall && (
+        <aside
+          className="call-overlay"
+          aria-label={pendingIncoming ? 'Incoming call' : 'Active call'}
+        >
+          {nameFor(other) && (
+            <h2 className="call-contact-name">{nameFor(other)}</h2>
+          )}
+          <CallScreen
+            call={{ ...activeCall, direction }}
+            incoming={pendingIncoming}
+            onAccept={voice.acceptIncoming}
+            onReject={voice.rejectIncoming}
+            onHangup={voice.hangup}
+            onMute={voice.toggleMute}
+            onSendDigit={voice.sendDigits}
+            muted={activeCall.muted}
+          />
+        </aside>
+      )}
+      {confirmation && (
+        <ConfirmDialog
+          title="Confirm call destination"
+          confirmLabel={calling ? 'Calling…' : 'Call now'}
+          onCancel={() => setConfirmation(null)}
+          onConfirm={confirmCall}
+          disabled={blocked}
+        >
+          <p>
+            {confirmation.name && (
+              <strong>
+                {confirmation.name}
+                <br />
+              </strong>
+            )}
+            {formatNumber(confirmation.number)}
+          </p>
+          {blocked && (
+            <p className="muted">
+              Calling is unavailable while offline or another call is in
+              progress.
+            </p>
+          )}
+        </ConfirmDialog>
+      )}
+      <footer className="app-footer">
+        {identity && <span>Identity: {identity}</span>}
+        {sms.smsFrom && <span> · Number: {formatNumber(sms.smsFrom)}</span>}
       </footer>
     </div>
   );
@@ -256,7 +411,9 @@ export default function App() {
   return (
     <TwilioProvider>
       <SmsProvider>
-        <MainPanel />
+        <WorkspaceProvider>
+          <MainPanel />
+        </WorkspaceProvider>
       </SmsProvider>
     </TwilioProvider>
   );

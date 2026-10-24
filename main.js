@@ -101,6 +101,13 @@ function registerIpc() {
       // cannot produce a second alert.
       silent: true,
     });
+    notification.on('click', () => {
+      const win = BrowserWindow.getAllWindows()[0];
+      if (!win) return;
+      if (win.isMinimized()) win.restore();
+      win.show(); win.focus();
+      win.webContents.send('sms:open', { number });
+    });
     notification.show();
     return { ok: true };
   });
@@ -124,6 +131,28 @@ function registerIpc() {
         to: payload.to,
         body: payload.body,
       });
+      return { ok: true, ...(data || {}) };
+    } catch (err) {
+      return { ok: false, error: err.message, status: err.outcome || 'unknown' };
+    }
+  });
+  ipcMain.handle('sms:me', async () => {
+    try {
+      const data = await smsBroker.getMe();
+      return { ok: true, ...(data || {}) };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+  ipcMain.handle('sms:clear', async (_e, payload) => {
+    try {
+      if (!payload || typeof payload !== 'object') {
+        return { ok: false, error: 'payload required' };
+      }
+      if (typeof payload.number !== 'string' || !payload.number) {
+        return { ok: false, error: 'number required' };
+      }
+      const data = await smsBroker.clearConversation(payload.number);
       return { ok: true, ...(data || {}) };
     } catch (err) {
       return { ok: false, error: err.message };

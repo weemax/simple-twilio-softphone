@@ -28,6 +28,8 @@ const INVOKABLE_CHANNELS = new Set([
   // SMS (renderer -> main -> local server)
   'sms:list',
   'sms:send',
+  'sms:clear',
+  'sms:me',
 ]);
 
 /**
@@ -35,6 +37,7 @@ const INVOKABLE_CHANNELS = new Set([
  * Renderer subscribes via on(channel, handler).
  */
 const SUBSCRIBABLE_CHANNELS = new Set([
+  'sms:open',
   'call:incoming',
   'call:status',
   'device:status',
@@ -85,6 +88,11 @@ const api = {
     // payload: { to: '+1…', body: '…' }.
     // Returns { ok: true, sid, to, status } or { ok: false, error }.
     send: (payload) => ipcRenderer.invoke('sms:send', payload),
+    // payload: { number: '+1…' }. Wipes local history for that thread.
+    // Returns { ok: true, cleared, number, messages: [] } or { ok: false, error }.
+    clear: (payload) => ipcRenderer.invoke('sms:clear', payload),
+    // Operator identity as the token server sees it: callerId + smsFrom.
+    me: () => ipcRenderer.invoke('sms:me'),
   },
 
   app: {

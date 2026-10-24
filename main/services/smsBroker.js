@@ -45,15 +45,17 @@ function request(method, path, body) {
           if (res.statusCode < 200 || res.statusCode >= 300) {
             // Try to surface the server's structured error if it gave one.
             let detail = text;
+            let outcome = null;
             try {
               const parsed = JSON.parse(text);
               detail = parsed.error || parsed.detail || text;
+              outcome = parsed.status;
             } catch (_) {
               // not JSON, keep raw text
             }
-            return reject(
-              new Error(`SMS backend ${res.statusCode}: ${detail}`)
-            );
+            const error = new Error(`SMS backend ${res.statusCode}: ${detail}`);
+            error.outcome = outcome || (res.statusCode >= 400 && res.statusCode < 500 ? 'failed' : 'unknown');
+            return reject(error);
           }
           if (!text) return resolve(null);
           try {
@@ -88,4 +90,15 @@ async function sendMessage({ to, body }) {
   return request('POST', '/sms/send', { to, body });
 }
 
-module.exports = { listConversations, sendMessage };
+async function clearConversation(number) {
+  if (!number || typeof number !== 'string') {
+    throw new Error('`number` is required');
+  }
+  return request('POST', '/sms/clear', { number });
+}
+
+async function getMe() {
+  return request('GET', '/me');
+}
+
+module.exports = { listConversations, sendMessage, clearConversation, getMe };

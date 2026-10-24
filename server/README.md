@@ -24,6 +24,10 @@ server-side integration. We mitigate by binding to `127.0.0.1` only and by
 keeping every route except Twilio's webhooks private — see
 [Public and private routes](#public-and-private-routes).
 
+The legacy Configure form still reads back its unused desktop Auth Token copy; the
+separately accepted in-app setup piece removes that read-back. This workspace piece
+does not access or migrate that copy.
+
 ## Setup
 
 ```bash
@@ -88,8 +92,7 @@ from the Operator app". The server therefore splits its routes:
   health check) must reach, and their responses carry no secrets or
   message history. All of them except `/health` are Twilio's webhooks and
   also need a valid Twilio signature (next section).
-- **Private**: everything else — today `/token`, `/sms/send` and
-  `/sms/conversations`. A new route is private unless it is added to
+- **Private**: everything else — today `/token`, `/sms/send`, `/sms/conversations`, `/me` and `/sms/clear`. A new route is private unless it is added to
   `PUBLIC_ROUTES` on purpose. A private request must:
   1. arrive on a loopback connection (else `403 local only`);
   2. carry no proxy/tunnel forwarding headers (`Forwarded`, `Via`,
@@ -257,3 +260,17 @@ If you don't want to run a local Node process, deploy the equivalent
 serverless function to Twilio Functions, AWS Lambda, Cloudflare Workers,
 etc. The renderer's main process just needs an HTTP endpoint that returns
 `{ token, identity, ttl }` for a `POST` with `{ identity }`.
+
+
+## Workspace endpoints and send outcomes
+
+`GET /me` returns only `{ ok, callerId, smsFrom }` through the same private-route gate
+as tokens and history. `POST /sms/clear` with `{ number }` confirms clearing local
+history for that number; it does not contact Twilio. The desktop uses its SMS broker,
+which supplies this run's local key. There is no unauthenticated browser/CORS fallback.
+
+An explicit provider rejection records `failed`; a transport error or server-side
+failure after submission records `unknown`, because Twilio may have accepted it.
+These statuses survive in the existing conversation store. The renderer never
+retries automatically, and offers resend only for confirmed failed/undelivered
+messages. A late authoritative delivery update can still settle a known SID.

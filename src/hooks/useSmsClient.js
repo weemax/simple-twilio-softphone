@@ -14,7 +14,12 @@ import { SmsService } from '../services/smsService';
  */
 export function useSmsClient() {
   const serviceRef = useRef(null);
-  if (!serviceRef.current) {
+  // Recreate if this renderer session still holds a pre-number-display
+  // SmsService (Fast Refresh keeps the useRef singleton).
+  if (!serviceRef.current || typeof serviceRef.current._refreshMe !== 'function') {
+    if (serviceRef.current) {
+      serviceRef.current.stop();
+    }
     serviceRef.current = new SmsService();
   }
   const service = serviceRef.current;
@@ -45,6 +50,10 @@ export function useSmsClient() {
     (number) => service.getThread(number),
     [service]
   );
+  const clearThread = useCallback(
+    (number) => service.clearThread(number),
+    [service]
+  );
   const destroy = useCallback(() => service.destroy(), [service]);
 
   return {
@@ -53,6 +62,7 @@ export function useSmsClient() {
     refresh,
     send,
     getThread,
+    clearThread,
     destroy,
   };
 }

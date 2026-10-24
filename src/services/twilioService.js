@@ -122,13 +122,15 @@ export class TwilioService {
         ? this._callSnapshot(this.incomingCall)
         : null,
       error: this.lastError || null,
+      lastCall: this.lastCall || null,
+      connecting: Boolean(this.connecting),
     };
   }
 
   _callSnapshot(call) {
     return {
       sid: call.parameters?.CallSid || null,
-      to: call.parameters?.To || null,
+      to: call.parameters?.To || call.__to || null,
       from: call.parameters?.From || null,
       direction: call.direction,
       status: call.status(),
@@ -209,6 +211,17 @@ export class TwilioService {
   _watchCallState(call) {
     if (call.__twilioServiceStateListenersAttached) return;
     call.__twilioServiceStateListenersAttached = true;
+    call.__localId = `call-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    call.__observedAt = Date.now();
+    call.on('disconnect', () => this._finishCall(call));
+    call.on('reject', () => this._finishCall(call, 'declined'));
+    call.on('cancel', () => this._finishCall(call));
+    call.on('error', err => {
+      this.lastError = err.message || String(err);
+      call.__failureOutcome = /busy/i.test(this.lastError) ? 'busy' : 'failed';
+      if (['closed', 'disconnected'].includes(call.status())) this._finishCall(call, call.__failureOutcome);
+      this._emit();
+    });
 
     call.on('ringing', (hasEarlyMedia) => {
       call.__hasEarlyMedia = hasEarlyMedia;
@@ -218,45 +231,39 @@ export class TwilioService {
     call.on('reconnected', () => this._emit());
   }
 
+  _finishCall(call, outcome) {
+    if (call.__completed) return;
+    call.__completed = true;
+    const incoming = String(call.direction).toUpperCase() === 'INCOMING';
+    this.lastCall = {
+      id: call.__localId,
+      number: incoming ? call.parameters?.From : (call.parameters?.To || call.__to),
+      direction: incoming ? 'incoming' : 'outgoing',
+      at: call.__observedAt,
+      outcome: outcome || call.__requestedOutcome || call.__failureOutcome || (call.__startedAt ? 'completed' : incoming ? 'missed' : 'unanswered'),
+      duration: call.__startedAt ? Math.max(0, Math.floor((Date.now()-call.__startedAt)/1000)) : 0,
+    };
+    if (this.currentCall === call) this.currentCall = null;
+    if (this.incomingCall === call) this.incomingCall = null;
+    this._emit();
+  }
+
   _onIncoming(call) {
     this._watchCallState(call);
     this.incomingCall = call;
-    this._emit();
     call.on('accept', () => this._setCurrentCall(call));
-    call.on('disconnect', () => {
-      if (this.incomingCall === call) this.incomingCall = null;
-      this._emit();
-    });
-    call.on('reject', () => {
-      if (this.incomingCall === call) this.incomingCall = null;
-      this._emit();
-    });
-    call.on('cancel', () => {
-      if (this.incomingCall === call) this.incomingCall = null;
-      this._emit();
-    });
-    call.on('error', (err) => {
-      this.lastError = err.message || String(err);
-      this._emit();
-    });
+    this._emit();
   }
 
   _setCurrentCall(call) {
     this._watchCallState(call);
     this.currentCall = call;
-    call.__startedAt = Date.now();
-    call.on('accept', () => {
-      call.__startedAt = Date.now();
-      this._emit();
-    });
-    call.on('disconnect', () => {
-      if (this.currentCall === call) this.currentCall = null;
-      this._emit();
-    });
-    call.on('error', (err) => {
-      this.lastError = err.message || String(err);
-      this._emit();
-    });
+    if (this.incomingCall === call) this.incomingCall = null;
+    if (['open', 'connected'].includes(call.status())) call.__startedAt = Date.now();
+    if (!call.__acceptWatched) {
+      call.__acceptWatched = true;
+      call.on('accept', () => { call.__startedAt = Date.now(); this._emit(); });
+    }
     this._emit();
   }
 
@@ -267,11 +274,19 @@ export class TwilioService {
     if (this.device.state !== 'registered') {
       throw new Error(`Device not ready (state: ${this.device.state})`);
     }
-    const call = await this.device.connect({
-      params: { To: params.to },
-    });
-    this._setCurrentCall(call);
-    return call;
+    if (this.connecting || this.currentCall || this.incomingCall) throw new Error('A call is already in progress.');
+    this.connecting = true; this.lastError = null; this._emit();
+    try {
+      const call = await this.device.connect({ params: { To: params.to } });
+      // Some SDK versions do not include To on the initial outgoing call.
+      call.__to = params.to;
+      this._setCurrentCall(call);
+      return call;
+    } catch (err) {
+      this.lastError = err.message || 'Call could not start.';
+      this.lastCall = { id:`call-${Date.now()}-${Math.random().toString(36).slice(2)}`,number:params.to,direction:'outgoing',at:Date.now(),outcome:'failed',duration:0 };
+      throw err;
+    } finally { this.connecting = false; this._emit(); }
   }
 
   acceptIncoming() {
@@ -281,16 +296,18 @@ export class TwilioService {
 
   rejectIncoming() {
     if (!this.incomingCall) return;
-    this.incomingCall.reject();
-    this.incomingCall = null;
-    this._emit();
+    const call = this.incomingCall;
+    call.reject();
+    this._finishCall(call, 'declined');
   }
 
   hangup() {
     if (this.currentCall) {
-      this.currentCall.disconnect();
-      this.currentCall = null;
-      this._emit();
+      const call = this.currentCall;
+      const outcome = call.__startedAt ? 'completed' : 'canceled';
+      call.__requestedOutcome = outcome;
+      call.disconnect();
+      this._finishCall(call, outcome);
     }
   }
 

@@ -1,0 +1,412 @@
+/* Accepted workspace: persistent navigation, named conversations and local contacts. */
+[hidden] {
+  display: none !important;
+}
+.workspace-app {
+  max-width: 1280px;
+  position: relative;
+}
+.workspace-app button {
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 11px;
+  cursor: pointer;
+}
+.workspace-app button:hover:not(:disabled) {
+  border-color: var(--accent-hi);
+}
+.workspace-app button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.workspace-app button.primary,
+.workspace-app button.active {
+  background: var(--accent);
+  color: #fff;
+}
+.workspace-app :focus-visible {
+  outline: 2px solid var(--accent-hi);
+  outline-offset: 3px;
+}
+.workspace-app .spacer {
+  flex: 1;
+}
+.workspace-app .status-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+.workspace-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.workspace-nav {
+  width: 154px;
+  flex-shrink: 0;
+  padding: 18px 10px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.workspace-nav button {
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.workspace-main {
+  padding: 18px;
+  min-width: 0;
+  min-height: 0;
+}
+.workspace-page h2 {
+  margin: 0 0 12px;
+  font-size: 20px;
+}
+.workspace-page h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+.workspace-page p {
+  line-height: 1.5;
+}
+.page-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.page-heading p {
+  margin: 4px 0;
+}
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.panel {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-elev);
+  padding: 16px;
+  margin: 12px 0;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 10px;
+  font: inherit;
+  font-size: 14px;
+}
+.contact-form {
+  max-width: 560px;
+}
+.contact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+.contact-card {
+  margin: 0;
+}
+.phone-number {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.table-scroll {
+  overflow-x: auto;
+  margin: 12px 0;
+}
+.workspace-app table {
+  border-collapse: collapse;
+  width: 100%;
+  text-align: left;
+}
+.workspace-app th,
+.workspace-app td {
+  border-bottom: 1px solid var(--border);
+  padding: 10px;
+  overflow-wrap: anywhere;
+}
+.empty-note {
+  margin: 40px 0;
+  text-align: center;
+  color: var(--text-dim);
+}
+.subnav {
+  margin: 0 0 18px;
+}
+.calls-page .dialer {
+  max-width: 460px;
+  margin: 20px auto;
+}
+.calls-page .dialpad .display input {
+  min-width: 0;
+}
+.calls-page .dialpad .key {
+  padding: 15px 0;
+}
+.recent-call {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.recent-call p {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.badge {
+  display: inline-flex;
+  border-radius: 20px;
+  padding: 1px 6px;
+  background: var(--accent);
+  color: white;
+  font-size: 12px;
+}
+.active .badge {
+  background: var(--bg-elev);
+}
+.connection-list {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 2fr;
+  gap: 14px;
+  line-height: 1.5;
+}
+.connection-list dt {
+  color: var(--text-dim);
+}
+.connection-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.confirm-dialog {
+  background: var(--bg-elev);
+  border: 1px solid var(--accent-hi);
+  border-radius: 12px;
+  color: var(--text);
+  padding: 24px;
+  max-width: min(480px, calc(100vw - 32px));
+}
+.confirm-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.65);
+}
+.confirm-dialog h2 {
+  font-size: 18px;
+  margin: 0 0 14px;
+}
+.confirm-dialog p,
+.confirm-dialog blockquote {
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+.call-overlay {
+  position: fixed;
+  z-index: 10;
+  top: 115px;
+  right: max(18px, calc((100vw - 1220px) / 2));
+  width: min(370px, calc(100vw - 36px));
+  max-height: calc(100vh - 150px);
+  overflow-y: auto;
+  border: 1px solid var(--accent-hi);
+  border-radius: 12px;
+  background: var(--bg-elev);
+  padding: 16px;
+  box-shadow: 0 12px 60px #0008;
+}
+.call-overlay .call-screen {
+  padding: 12px 0;
+}
+.call-overlay .call-screen .actions {
+  flex-wrap: wrap;
+}
+.call-contact-name {
+  text-align: center;
+  font-size: 18px;
+  margin: 0;
+}
+.call-overlay .number {
+  font-size: 22px;
+  overflow-wrap: anywhere;
+}
+.messages-view {
+  height: 100%;
+  min-height: 0;
+}
+.workspace-app .sms-panel {
+  min-height: 0;
+  height: 100%;
+}
+.workspace-app .sms-panel-title {
+  text-transform: none;
+  font-size: 18px;
+  letter-spacing: 0;
+  color: var(--text);
+  margin: 0;
+}
+.workspace-app .sms-panel-list {
+  width: 285px;
+}
+.workspace-app .sms-panel-thread-header {
+  flex-wrap: wrap;
+}
+.workspace-app .sms-panel-main {
+  min-height: 0;
+}
+.workspace-app .sms-thread {
+  min-height: 80px;
+}
+.workspace-app .sms-composer {
+  flex: 0 0 auto;
+  max-height: 50%;
+  overflow-y: auto;
+}
+.workspace-app .sms-bubble {
+  flex-shrink: 0;
+}
+.sms-bubble-meta time {
+  color: inherit;
+}
+.sms-day {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 12px 0;
+}
+.inbox-search {
+  padding: 0 12px;
+}
+.archive-filter {
+  margin: 0 12px 10px;
+}
+.sms-new-row .field {
+  flex: 1;
+}
+.search-result {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 6px 8px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.sms-bubble.search-hit {
+  outline: 2px solid var(--accent-hi);
+  outline-offset: 3px;
+}
+.sms-failure {
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sms-thread-clear-prompt {
+  flex-wrap: wrap;
+}
+.archive-notice {
+  padding: 0 14px;
+}
+.segment-warning {
+  color: #f3c97a;
+  margin: 8px 0 0;
+}
+.composer-help {
+  margin: 5px 0 0;
+}
+.thread-back {
+  display: none;
+}
+@media (max-width: 760px) {
+  .workspace-layout {
+    flex-direction: column;
+  }
+  .workspace-nav {
+    width: 100%;
+    padding: 8px;
+    flex-direction: row;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    gap: 6px;
+  }
+  .workspace-nav button {
+    flex: 1;
+    justify-content: center;
+    padding: 8px 6px;
+    font-size: 12px;
+  }
+  .workspace-main {
+    padding: 10px;
+  }
+  .workspace-app .app-header {
+    padding: 14px;
+    flex-wrap: wrap;
+  }
+  .workspace-app .app-header .subtitle {
+    display: none;
+  }
+  .page-heading {
+    flex-direction: column;
+  }
+  .workspace-app .sms-panel-list {
+    width: 100%;
+    border: 0;
+  }
+  .workspace-app .sms-panel-main {
+    display: none;
+  }
+  .workspace-app .sms-panel.has-selection .sms-panel-list {
+    display: none;
+  }
+  .workspace-app .sms-panel.has-selection .sms-panel-main {
+    display: flex;
+  }
+  .workspace-app .thread-back {
+    display: inline-flex;
+    font-size: 12px;
+  }
+  .workspace-app .sms-panel-thread-header {
+    padding: 10px;
+  }
+  .workspace-app .sms-panel-thread-header .button-row {
+    width: 100%;
+  }
+  .workspace-app .sms-bubble {
+    max-width: 90%;
+  }
+  .workspace-app .sms-panel-from {
+    display: none;
+  }
+  .connection-list {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .connection-list dd {
+    margin-bottom: 12px;
+  }
+  .contact-grid {
+    grid-template-columns: 1fr;
+  }
+  .sms-panel.has-selection .sms-new-row {
+    flex-shrink: 0;
+  }
+}

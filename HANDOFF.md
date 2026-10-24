@@ -22,6 +22,32 @@ It does **not** include phone-number purchasing, Operator-to-Operator VoIP, or O
 
 ---
 
+## Accepted phone UX work — workspace piece
+
+The workspace now has persistent Messages, Calls, Contacts and Settings navigation,
+local contacts with reviewed CSV import, per-recipient drafts/unread/archive/scroll
+metadata, message-text search, truthful failed/unknown outcomes, and app-observed
+recent/missed calls. The call UI remains mounted alongside the workspace so incoming
+calls do not discard drafts or reading position.
+
+`src/workspace/WorkspaceContext.jsx` owns additive version-1 metadata under the
+existing desktop config's `workspace` key. `main/services/config.js` writes atomically.
+No existing SMS history or secret is moved or deleted. `src/workspace/model.js` owns
+strict contact number validation, CSV review and encoding-aware segment estimates.
+`SmsPanel` retains the adopted new-thread, sender-number, confirmed-clear and
+follow-latest behaviors. Clearing now uses only the authenticated desktop bridge;
+the adopted unauthenticated browser fallback is intentionally removed to preserve
+TWP-7. `/me` and `/sms/clear` are private-by-default under the same gate, including
+through tunnels. Notification clicks use the allowlisted `sms:open` push channel.
+
+All five accepted pieces and actual submitted values are recorded in
+[`docs/phone-ux-plan.md`](docs/phone-ux-plan.md). This piece does not ship the launcher,
+reviewed Twilio setup, photos or manual queue. Do not confuse the old form below
+with the pending reviewed account-setup flow. The form's existing token read-back
+remains until that separate piece replaces it; do not access real stored secrets in
+tests. Unrelated unpublished `tests/truhome/` and `tools/sms-agent-harness/` work stays
+in the adopted folder unchanged and is not folded into this PR.
+
 ## 2. Quick Start
 
 Three processes are needed for full development. Open three terminals at the project root.
@@ -257,7 +283,7 @@ Two channel types:
 | `server/smsStore.js` | JSON-backed conversation store. E.164 keyed, 500-msg cap, atomic write. Exposes `updateMessageBySid` for status callbacks. |
 | `server/.env.example` | Documents the required env vars (now includes optional `TWILIO_SMS_FROM` and `OPERATOR_IDENTITY`). |
 | `server/README.md` | Server-specific setup, security notes. |
-| `src/App.js` | Top-level: header, status bar, routing between AccountConfig / dialer / CallScreen / SmsPanel. |
+| `src/App.js` | Workspace shell: persistent navigation, contacts, dialer/recents, call overlay, Messages and legacy account settings. |
 | `src/App.css` | Dark softphone theme. |
 | `src/services/twilioService.js` | Device wrapper, snapshot pub/sub, token-refresh, mute, DTMF (with quiet local feedback tones), forwards `ringing`/`hasEarlyMedia`/`reconnecting`/`reconnected`, call placement. |
 | `src/services/smsService.js` | SMS service singleton. Pub/sub snapshot, 3s polling, send, getThread, inbound-notification detection (dedupes by message SID, capped at `MAX_SEEN_INBOUND_IDS`). |
@@ -458,10 +484,10 @@ End-to-end SMS chat in the `Messages` tab. Programmable SMS via Twilio REST + in
 - Failed sends are persisted as `failed` (red badge in UI) so they don't vanish
 - Conversations sorted newest-first; 500-msg cap per thread; body capped at 1600 chars (Twilio limit)
 - "+ New" button to start a thread with any E.164 number
-- E.164 normalization is forgiving (`(650) 253-0000`, `6502530000`, `+165****0000` all → `+165****0000`)
+- Server matching still accepts formatted numbers; the new workspace requires an explicit + and country code for new recipients and contacts.
 
 **What does NOT work (explicitly out of scope for v1):**
-- MMS / media attachments
+- MMS / media attachments (accepted as a separate upcoming piece)
 - Group threads
 - Read receipts
 - Typing indicators
