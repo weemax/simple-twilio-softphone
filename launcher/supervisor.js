@@ -402,7 +402,8 @@ class PhoneSession {
       if (this.settings.publicBaseUrl && this.settings.publicBaseUrl.replace(/\/+$/, '') !== started.url) {
         this.say(
           `server/.env has PUBLIC_BASE_URL=${this.settings.publicBaseUrl}; this session uses ngrok's address ${started.url} instead. ` +
-            "Twilio's console must use this address for calls and texts to arrive."
+            "Operator's own Twilio settings follow it on each start once you have connected in Settings → Twilio account; " +
+            'any other Twilio setting that points here must use this address for calls and texts to arrive.'
         );
       }
       return { state: 'started', url: started.url };

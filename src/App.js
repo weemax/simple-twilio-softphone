@@ -13,7 +13,8 @@ import {
 } from './workspace/ConnectionPanel';
 import { useSessionStatus } from './workspace/useSessionStatus';
 import { formatNumber } from './formatNumber';
-import { AccountConfig } from './components/AccountConfig/AccountConfig';
+import { TwilioSetup } from './setup/TwilioSetup';
+import { useSetupStatus } from './setup/useSetupStatus';
 import { Dialpad } from './components/Dialpad/Dialpad';
 import { CallScreen } from './components/CallScreen/CallScreen';
 import { SmsPanel } from './components/SmsPanel/SmsPanel';
@@ -27,6 +28,7 @@ function MainPanel() {
   const { data, update, ready, saveError, nameFor } = useWorkspace();
   const { snapshot, placeCall, register } = voice;
   const session = useSessionStatus();
+  const { status: setup, refresh: refreshSetup } = useSetupStatus();
   const [config, setConfig] = useState(null),
     [number, setNumber] = useState(''),
     [callsView, setCallsView] = useState('dialer');
@@ -45,13 +47,38 @@ function MainPanel() {
   useEffect(() => {
     readConfig();
   }, [readConfig]);
-  const accountSid =
-      typeof config?.accountSid === 'string' ? config.accountSid : '',
-    identity = typeof config?.identity === 'string' ? config.identity : '';
-  const configured = Boolean(accountSid && identity);
+  // One identity for registering and for incoming calls: the one the setup
+  // saved in server/.env, else the one an earlier version saved in the app's
+  // own settings.
+  const savedIdentity =
+    typeof config?.identity === 'string' ? config.identity : '';
+  const identity = (setup && setup.ok !== false && setup.identity) || savedIdentity;
+  const configured = Boolean(setup && setup.ok !== false && setup.credentials && identity);
   useEffect(() => {
     if (configured) register(identity).catch(() => {});
   }, [configured, identity, register]);
+  // An unconnected first launch opens Settings → Twilio account, once;
+  // every other launch keeps the section the person last used.
+  const [openedSetup, setOpenedSetup] = useState(false);
+  useEffect(() => {
+    if (openedSetup || !ready || !setup || setup.ok === false) return;
+    setOpenedSetup(true);
+    if (!setup.credentials) {
+      setSettingsView('account');
+      update((d) => ({ ...d, view: 'settings' }));
+    }
+  }, [openedSetup, ready, setup, update]);
+  // A replaced key or a new identity needs a fresh registration, but never
+  // in the middle of a call: re-registering would end it. The first
+  // connection registers through the effect above once its status arrives.
+  const reRegister = useCallback(
+    (next) => {
+      const id = (next && next.ok !== false && next.identity) || identity;
+      const busy = snapshot.currentCall || snapshot.incomingCall || snapshot.connecting;
+      if (configured && id && !busy) register(id).catch(() => {});
+    },
+    [configured, identity, register, snapshot.currentCall, snapshot.incomingCall, snapshot.connecting],
+  );
   useEffect(() => {
     if (!ready || !snapshot.lastCall) return;
     update((d) =>
@@ -318,25 +345,22 @@ function MainPanel() {
                 Twilio account
               </button>
             </div>
-            {settingsView === 'connection' ? (
+            <div hidden={settingsView !== 'connection'}>
               <ConnectionPanel
                 status={session}
                 voice={snapshot}
                 sms={sms}
-                configured={configured}
+                setup={setup}
               />
-            ) : (
-              <>
-                <p className="muted small">
-                  This is the existing account form. Reviewed automatic Twilio
-                  setup follows in its separate accepted piece.
-                </p>
-                <AccountConfig
-                  onConfigured={readConfig}
-                  onCancel={() => setSettingsView('connection')}
-                />
-              </>
-            )}
+            </div>
+            <div hidden={settingsView !== 'account'}>
+              <TwilioSetup
+                status={setup}
+                fallbackIdentity={savedIdentity}
+                onRefresh={refreshSetup}
+                onConnected={reRegister}
+              />
+            </div>
           </section>
         </main>
       </div>

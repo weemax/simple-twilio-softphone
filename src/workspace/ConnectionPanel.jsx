@@ -74,9 +74,45 @@ export function TunnelNotice({ status }) {
   );
 }
 
-export function ConnectionPanel({ status, voice, sms, configured }) {
+// What the setup service last learned about the Twilio account, kept apart
+// from the local service and the tunnel. `setup` is the answer of
+// setup:status (never a secret); null while it is loading.
+export function accountSummary(setup) {
+  if (!setup) return { short: 'checking', text: 'Checking…' };
+  if (setup.ok === false) return { short: 'not checked', text: 'Not checked: the setup service did not answer.' };
+  if (!setup.credentials) return { short: 'not connected', text: 'Not connected. Open Twilio account to connect it.' };
+  const c = setup.connection || {};
+  const state = (c.account && c.account.state) || 'unchecked';
+  const when = c.checkedAt ? ` Last checked ${new Date(c.checkedAt).toLocaleString()}.` : '';
+  if (state === 'ok') return { short: 'connected', text: `Connected (${setup.accountSid}).${when}` };
+  if (state === 'invalid-credentials') {
+    return { short: 'sign-in rejected', text: `Twilio did not accept the saved Account SID and Auth Token. Open Twilio account to update them.${when}`, problem: true };
+  }
+  if (state === 'unreachable') {
+    return { short: 'not reachable', text: `Twilio could not be reached at the last check; nothing was changed.${when}`, problem: true };
+  }
+  if (state === 'error') {
+    return { short: 'check failed', text: `The last check did not finish: ${(c.account && c.account.detail) || 'unknown reason'}.${when}`, problem: true };
+  }
+  return { short: 'saved', text: `Credentials saved (${setup.accountSid}); not checked yet. Open Twilio account and choose Check connection now.` };
+}
+
+function routeSummary(route, noun) {
+  if (!route) return 'Not checked yet. Open Twilio account and choose Check connection now.';
+  if (route.state === 'operator') return 'Goes to Operator';
+  if (route.state === 'blank') return `Not set: ${noun} will not reach this app.`;
+  if (route.state === 'unavailable') return `Not available on the chosen number.`;
+  if (route.state === 'stale') return 'Goes to an Operator application that no longer exists.';
+  return `Goes to ${route.description}, not Operator: ${noun} will not reach this app.`;
+}
+
+export function ConnectionPanel({ status, voice, sms, setup }) {
   const service = serviceSummary(status);
   const tunnel = tunnelSummary(status);
+  const account = accountSummary(setup);
+  const conn = (setup && setup.connection) || {};
+  const callback = conn.callback;
+  const mms = conn.mms;
   return (
     <div className="panel">
       <h3>Connection</h3>
@@ -88,8 +124,20 @@ export function ConnectionPanel({ status, voice, sms, configured }) {
           {tunnel.text}
           {tunnel.problem && <div className="muted small">{TUNNEL_LIMITS}</div>}
         </dd>
+        <dt>Twilio account</dt>
+        <dd>{account.text}</dd>
         <dt>Voice registration</dt>
         <dd>{voice.state}</dd>
+        <dt>Incoming calls</dt>
+        <dd>{routeSummary(conn.voice, 'calls')}</dd>
+        <dt>Incoming texts</dt>
+        <dd>{routeSummary(conn.sms, 'texts')}</dd>
+        <dt>Delivery callback</dt>
+        <dd>
+          {callback && callback.state === 'ready'
+            ? callback.url
+            : 'No public address: delivery updates for texts you send will not arrive.'}
+        </dd>
         <dt>Message updates</dt>
         <dd>
           {sms.lastError ||
@@ -97,11 +145,13 @@ export function ConnectionPanel({ status, voice, sms, configured }) {
         </dd>
         <dt>SMS sender</dt>
         <dd>{formatNumber(sms.smsFrom || sms.callerId) || 'Not configured'}</dd>
-        <dt>Twilio account</dt>
+        <dt>Photo (MMS) sender</dt>
         <dd>
-          {configured
-            ? 'Saved locally; provider setup remains manual'
-            : 'Not configured'}
+          {mms === 'yes'
+            ? 'This number can send photos.'
+            : mms === 'no'
+              ? 'This number cannot send photos.'
+              : 'Not checked yet.'}
         </dd>
       </dl>
       {voice.error && <p className="error">{voice.error}</p>}

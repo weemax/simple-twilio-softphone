@@ -8,11 +8,11 @@ const {
 } = require('electron');
 const isDev = require('electron-is-dev');
 
-const secrets = require('./main/services/secrets');
 const config = require('./main/services/config');
 const tokenBroker = require('./main/services/tokenBroker');
 const smsBroker = require('./main/services/smsBroker');
 const sessionStatus = require('./main/services/session');
+const setupBroker = require('./main/services/setupBroker');
 
 // Where the development renderer lives. `npm run phone` passes its React
 // address; only a dev server on this machine is accepted, since the page
@@ -90,13 +90,11 @@ function registerIpc() {
   ipcMain.handle('config:set', (_e, key, value) => config.set(key, value));
   ipcMain.handle('config:clear', (_e, key) => config.clear(key));
 
-  // Secrets (encrypted via safeStorage when available)
-  ipcMain.handle('secrets:set', (_e, { key, value }) =>
-    secrets.setSecret(key, value)
-  );
-  ipcMain.handle('secrets:get', (_e, key) => secrets.getSecret(key));
-  ipcMain.handle('secrets:clear', (_e, key) => secrets.clearSecret(key));
-  ipcMain.handle('secrets:available', () => secrets.isAvailable());
+  // No secrets channel: the renderer cannot read, write or clear a stored
+  // credential. Twilio credentials live in server/.env and are set only by
+  // the setup channels below, which never return them. (An old desktop copy
+  // of the Auth Token in main/services/secrets.js is left as it was: it is
+  // not read, migrated or deleted.)
 
   // Capability tokens
   ipcMain.handle('token:fetch', async (_e, identity) => {
@@ -185,6 +183,27 @@ function registerIpc() {
       return { ok: false, error: err.message };
     }
   });
+
+  // In-app Twilio setup (see main/services/setupBroker.js). Each answer is
+  // { ok, ... } and never contains the Auth Token or an API secret.
+  for (const [channel, call] of [
+    ['setup:status', () => setupBroker.status()],
+    ['setup:check', (input) => setupBroker.check(input)],
+    ['setup:review', (input) => setupBroker.review(input)],
+    ['setup:connect', (input) => setupBroker.connect(input)],
+    ['setup:repair', () => setupBroker.repair()],
+  ]) {
+    ipcMain.handle(channel, async (_e, input) => {
+      try {
+        const answer = await call(input);
+        // A new key or application invalidates tokens already signed.
+        if (channel === 'setup:connect' || channel === 'setup:repair') tokenBroker.invalidateCache();
+        return answer;
+      } catch (err) {
+        return { ok: false, kind: 'service', error: err.message };
+      }
+    });
+  }
 
   // Local service and tunnel status (see main/services/session.js).
   ipcMain.handle('session:status', async () => {

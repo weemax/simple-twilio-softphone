@@ -14,8 +14,14 @@ fs.mkdirSync(profile, { recursive: true });
 app.setPath('userData', profile);
 app.commandLine.appendSwitch('password-store', 'basic');
 const account = 'AC00000000000000000000000000000000';
+// OPERATOR_DESKTOP_SETUP=fresh: no Twilio settings at all, so the app opens on
+// Settings → Twilio account and the real setup service talks to the fictional
+// Twilio at OPERATOR_TWILIO_API_BASE (tools/fake-twilio, started by the journey).
+const fresh = process.env.OPERATOR_DESKTOP_SETUP === 'fresh';
+if (fresh && !/^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.OPERATOR_TWILIO_API_BASE || ''))
+  throw new Error('Fresh mode needs the loopback fictional Twilio.');
 const cfg = path.join(profile, 'config.json');
-if (!fs.existsSync(cfg))
+if (!fresh && !fs.existsSync(cfg))
   fs.writeFileSync(
     cfg,
     JSON.stringify({ accountSid: account, identity: 'operator-demo' }),
@@ -64,7 +70,20 @@ if (!fs.existsSync(store))
     }),
     { mode: 0o600 },
   );
-Object.assign(process.env, {
+if (fresh) {
+  Object.assign(process.env, {
+    SMS_STORE_PATH: store,
+    OPERATOR_LOCAL_API_KEY_FILE: path.join(profile, 'local-api-key'),
+    OPERATOR_ENV_FILE: path.join(profile, 'server.env'),
+    OPERATOR_SETUP_STATE_FILE: path.join(profile, 'setup.json'),
+  });
+  for (const k of [
+    'TWILIO_ACCOUNT_SID', 'TWILIO_API_KEY', 'TWILIO_API_SECRET', 'TWILIO_TWIML_APP_SID',
+    'TWILIO_CALLER_ID', 'TWILIO_SMS_FROM', 'TWILIO_AUTH_TOKEN', 'OPERATOR_IDENTITY',
+    'PUBLIC_BASE_URL', 'SMS_PUBLIC_BASE_URL', 'SMS_STATUS_CALLBACK_URL', 'OPERATOR_INSTALL_ID',
+  ])
+    delete process.env[k];
+} else Object.assign(process.env, {
   TWILIO_ACCOUNT_SID: account,
   TWILIO_API_KEY: 'SK00000000000000000000000000000000',
   TWILIO_API_SECRET: 'fixture-secret',
@@ -82,6 +101,7 @@ Object.assign(process.env, {
 // Stub only the provider's REST client, not the server/router/brokers/preload.
 const original = Module._load;
 const realTwilio = require(path.join(root, 'server/node_modules/twilio'));
+// The messages client only; setup talks to the fictional Twilio over HTTP.
 const fakeTwilio = Object.assign(
   () => ({
     messages: {
@@ -141,9 +161,10 @@ app.on('web-contents-created', (_e, contents) => {
   contents.openDevTools = () => {};
 });
 (async () => {
-  const server = await require(path.join(root, 'server/server')).startServer({
-    port: 0,
-  });
+  const serverModule = require(path.join(root, 'server/server'));
+  const server = await serverModule.startServer({ port: 0 });
+  // What a launch does once the service listens: check what Operator owns.
+  if (fresh) serverModule.startRepair();
   const base = 'http://127.0.0.1:' + server.address().port;
   // Brokers use the real private key against the isolated server, not the installed app.
   process.env.TOKEN_BACKEND_URL = base + '/token';

@@ -131,59 +131,6 @@ input, select, textarea {
   text-align: right;
 }
 
-/* Account config */
-.account-config h2 { margin-top: 0; }
-.account-config form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-top: 12px;
-}
-.account-config label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--text-dim);
-}
-.account-config input {
-  background: var(--bg-elev-2);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 10px 12px;
-  color: var(--text);
-  font-size: 14px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.account-config input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(47, 129, 247, 0.25);
-}
-.account-config .row {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
-}
-.account-config button[type="submit"] {
-  background: var(--accent);
-  color: white;
-  border: 0;
-  border-radius: 6px;
-  padding: 10px 16px;
-  cursor: pointer;
-  font-weight: 500;
-}
-.account-config button[type="submit"]:disabled { opacity: 0.5; cursor: not-allowed; }
-.account-config button.secondary {
-  background: transparent;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 10px 16px;
-  cursor: pointer;
-}
-
 /* Dialpad */
 .dialer { display: flex; flex-direction: column; gap: 16px; }
 .dialpad .display {

@@ -10,9 +10,11 @@ The Electron renderer runs in a sandboxed process. Putting the Auth Token
 in a renderer-side env file means it lands in plaintext on disk and any
 XSS-equivalent renderer bug could exfiltrate it. Instead:
 
-1. The user enters their SID + Auth Token in the in-app **Configure** form.
-2. The Auth Token is encrypted at rest using Electron `safeStorage` and
-   never crosses the IPC boundary as a network payload.
+1. The user enters their Account SID + Auth Token in the in-app
+   **Settings → Twilio account** setup (see [In-app setup](#in-app-setup)).
+2. This server saves them to its own `server/.env` (owner-only) and never
+   returns them: no route, and no IPC call, ever answers with the Auth Token
+   or an API secret.
 3. When the renderer wants to register a `Device`, it asks main for a
    capability token.
 4. Main POSTs to this server, this server signs the JWT with the API
@@ -24,9 +26,48 @@ server-side integration. We mitigate by binding to `127.0.0.1` only and by
 keeping every route except Twilio's webhooks private — see
 [Public and private routes](#public-and-private-routes).
 
-The legacy Configure form still reads back its unused desktop Auth Token copy; the
-separately accepted in-app setup piece removes that read-back. This workspace piece
-does not access or migrate that copy.
+The old Configure form and its renderer-side secret store are gone: the renderer has
+no channel that can read, write or clear a stored secret. A desktop Auth Token copy
+an earlier version saved (`<userData>/secrets/store.json`) is neither read, migrated
+nor deleted.
+
+## In-app setup
+
+The first launch with no Twilio settings opens **Settings → Twilio account**:
+Account → Number → Review → Connected. `server/setup.js` does the work, over the
+private `/setup/*` routes (`status`, `check`, `review`, `connect`, `repair`):
+
+- **Check account** is one read-only request (the account's phone numbers). A wrong
+  Account SID/Auth Token and an unreachable Twilio are reported differently. Values
+  already in `server/.env` are reused without retyping; only their presence is shown.
+- **Number**: choose one existing number. Capabilities and current voice/text routes
+  are listed. Operator never buys a number; with none suitable it explains how to add
+  one in the Twilio console.
+- **Review** lists every change before **Connect**, from read-only requests. A route
+  that is blank or already Operator's is updated. A route that goes anywhere else
+  shows its current destination with an unchecked **Replace** control for that route
+  alone; consent is tied to the exact destination reviewed and does not carry over if
+  it changes. A Messaging Service that holds the number overrides the number's text
+  route; Operator says so and never edits Messaging Services.
+- **Connect** creates or reuses one Operator-owned API key and one TwiML Application
+  (both named `Operator softphone [<install id>]`, the id saved as
+  `OPERATOR_INSTALL_ID`) and sets the chosen number's voice and text routes to that
+  application. Nothing else in the account is touched. A working key already in
+  `server/.env` is reused; a new key's secret is saved before anything else can fail.
+  Connecting twice changes nothing and creates nothing new; a failed step is named and
+  **Retry** resumes. `server/.env` stays the single credential store (rewritten
+  atomically, owner-only, other lines kept).
+- **On every start** (`startRepair`), once connected, Operator checks only what it
+  owns: a deleted or rejected key is replaced (the old Operator key is deleted only
+  after the new one works), a deleted application is recreated, and the application's
+  addresses follow the session's public address. A route that goes elsewhere, or was
+  cleared, is only reported. An unreachable Twilio changes nothing. The result (no
+  secrets) is kept in `server/.operator-setup.json` and shown in Settings → Connection.
+
+Without `server/.env` writable (`OPERATOR_ENV_FILE` unset when not started directly),
+setup refuses to run. `OPERATOR_TWILIO_API_BASE` (only `http://127.0.0.1:<port>` or
+`localhost`) points every Twilio request at a fictional server for tests
+(`tools/fake-twilio`); credentials can never be redirected elsewhere that way.
 
 ## Setup
 
@@ -40,7 +81,9 @@ npm start
 
 ### Required env
 
-You can get all four values from the Twilio console:
+Normally the in-app setup writes all of these for you. To set them by hand, you can get
+the first four from the Twilio console. Without them the service still starts (so the
+app can open its setup), and `/token` and `/sms/send` answer `409` until they exist:
 
 - `TWILIO_ACCOUNT_SID` — your account SID (AC…)
 - `TWILIO_API_KEY` — create one in console → Account → API keys & tokens
@@ -50,8 +93,8 @@ You can get all four values from the Twilio console:
 Also required if you want inbound calls to ring the app:
 
 - `OPERATOR_IDENTITY` — the Twilio Client identity to dial for inbound
-  calls. Must match the "Client Identity" entered in the app's Configure
-  form. Without this, `/twiml` tells inbound callers the operator isn't
+  calls. The app registers as the same identity (the setup saves it here).
+  Without this, `/twiml` tells inbound callers the operator isn't
   configured and hangs up.
 
 Required for Twilio's webhooks — inbound calls, inbound SMS and delivery

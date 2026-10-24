@@ -21,10 +21,12 @@ const INVOKABLE_CHANNELS = new Set([
   'app:platform',
   'app:version',
   'app:openExternal',
-  // Storage helpers (so renderer never touches fs)
-  'secrets:set',
-  'secrets:get',
-  'secrets:clear',
+  // Twilio account setup (renderer -> main -> local service; no secret comes back)
+  'setup:status',
+  'setup:check',
+  'setup:review',
+  'setup:connect',
+  'setup:repair',
   // Notifications (renderer -> main native notification)
   'notification:show',
   // SMS (renderer -> main -> local server)
@@ -70,10 +72,22 @@ const api = {
     fetch: (identity) => ipcRenderer.invoke('token:fetch', identity),
   },
 
-  secrets: {
-    set: (key, value) => ipcRenderer.invoke('secrets:set', { key, value }),
-    get: (key) => ipcRenderer.invoke('secrets:get', key),
-    clear: (key) => ipcRenderer.invoke('secrets:clear', key),
+  setup: {
+    // Presence of each credential, never a value: { ok, credentials,
+    // accountSid, hasAuthToken, number, identity, publicBaseUrl,
+    // connected, connection: { account, voice, sms, callback, mms } }.
+    status: () => ipcRenderer.invoke('setup:status'),
+    // input: { accountSid?, authToken?, publicBaseUrl? }. Blank fields use
+    // what server/.env already holds. One read-only request to Twilio;
+    // { ok, numbers } or { ok: false, kind, error }.
+    check: (input) => ipcRenderer.invoke('setup:check', input || {}),
+    // input adds { numberSid, identity }. Read-only: { ok, rows } listing every change.
+    review: (input) => ipcRenderer.invoke('setup:review', input || {}),
+    // input adds { replace: { voice?, sms? } } naming each foreign route the
+    // person agreed to replace. { ok, steps } or { ok: false, failedStep }.
+    connect: (input) => ipcRenderer.invoke('setup:connect', input || {}),
+    // Checks and repairs only what Operator owns in the account.
+    repair: () => ipcRenderer.invoke('setup:repair'),
   },
 
   notifications: {
