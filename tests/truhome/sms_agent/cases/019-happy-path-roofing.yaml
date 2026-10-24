@@ -1,0 +1,26 @@
+id: "019"
+title: Happy path - roofing
+suite: qualification/happy-path
+source_ref: "3 / 19"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Hi, I need a new roof"
+    expect: {max_questions: 1}
+  - send: "It's about 12 years old"
+    expect: {max_questions: 1}
+  - send: "No leaks"
+    expect: {max_questions: 1}
+  - send: "No storm damage that I know of"
+    expect: {max_questions: 1}
+db_expect:
+  - {table: contact_custom_fields, field: "project_details", op: contains, value: roof}
+needs_review:
+  - quote: "db_expect on per-project qualification fields"
+    question: "Workspace 13604 has no roof_age / window_quantity / financing fields; only a generic project_details. Field-level capture cannot be verified here. Should those fields be added to the workspace, or is packing them into project_details the intended behavior?"
+  - quote: "Captures roof age, leaks, and storm damage before USE."
+    question: "Is the order of the three roof questions fixed, or may the agent ask them in any order? The turns here answer in doc order and assert only that all three are captured before the USE stage."
+notes: "Turn replies are scripted; if the agent asks in a different order the answers may not line up. Runner should stay in persona and adapt rather than replay blindly."

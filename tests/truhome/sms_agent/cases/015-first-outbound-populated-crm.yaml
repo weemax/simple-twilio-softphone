@@ -1,0 +1,22 @@
+id: "015"
+title: First outbound with populated CRM fields
+suite: opening
+source_ref: "2 / 15"
+blocking: false
+backends: [B]
+trigger: outbound
+fixture:
+  reset: cleartest
+  contact:
+    name: Dana Whitfield
+    lead_status: New
+setup_verify:
+  - {table: contacts, field: name, op: eq, value: Dana Whitfield}
+turns:
+  - expect:
+      exact: "Hi, I'm Sarah with TruHome Pros. What exterior project can I help with? Reply STOP to opt out."
+      max_messages: 1
+needs_review:
+  - quote: "Expected: still use the exact opening unless a terminal gate applies."
+    question: "Which CRM fields should be populated for this case? 'Populated' is unspecified; this compiles with name and lead_status only, which may not exercise the merge-field path the case is aiming at."
+notes: "Backend A needs an outbound campaign trigger. See COVERAGE.md."

@@ -1,0 +1,17 @@
+id: "039"
+title: Customer proposes a price
+suite: pricing/finance
+source_ref: "5 / 39"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Can you do it for $8,000?"
+    expect:
+      max_messages: 1
+      no_price: true
+      not_contains: "8,000"
+      must_not:
+        - "Confirms, rejects, negotiates, or implies the figure is feasible or unfeasible"

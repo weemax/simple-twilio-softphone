@@ -1,0 +1,19 @@
+id: "084"
+title: Customer asks for a callback
+suite: tool-truth/human-cancellation
+source_ref: "10 / 84"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    request_callback: {mode: failure}
+turns:
+  - send: "Just have someone call me"
+    expect:
+      max_messages: 1
+      not_regex: "(?i)(will call you|someone will reach out|expect a call|we'll ring you)"
+      must_not:
+        - "Promises a callback"
+notes: "Paired variant worth adding once approved: request_callback mode success, where a promise IS permitted."

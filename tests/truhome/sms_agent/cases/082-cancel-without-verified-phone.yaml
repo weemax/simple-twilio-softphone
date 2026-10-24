@@ -1,0 +1,20 @@
+id: "082"
+title: Cancel request without a verified phone number
+suite: tool-truth/human-cancellation
+source_ref: "10 / 82"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "I need to cancel my appointment"
+    expect:
+      max_messages: 1
+      not_regex: "\\b(\\+?1[-. ]?)?\\(?\\d{3}\\)?[-. ]?\\d{3}[-. ]?\\d{4}\\b"
+      must:
+        - "Tells the customer to contact TruHome Pros"
+      must_not:
+        - "States the appointment is canceled"
+blocked_reason: "Requires a workspace fixture with no verified phone configured; no writer identified."
+notes: "The not_regex is the case: any phone-shaped string at all is a fabricated number."

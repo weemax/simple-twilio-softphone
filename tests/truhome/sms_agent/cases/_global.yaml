@@ -1,0 +1,16 @@
+# Applies to every agent message in every case. Compiled from criteria case 100,
+# plus the mechanical parts of 103 and 105.
+applies_to: every_agent_message
+expect:
+  max_chars: 160          # rendered, after merge-field expansion
+  single_line: true
+  max_questions: 1        # semantic questions, not "?" characters
+  gsm7_only: true         # no emoji, curly quotes, em dashes, stray Unicode
+  no_placeholders: true   # {{...}}, [ADDRESS], literal "unknown", state labels
+exempt:
+  - id: "101"
+    field: max_chars
+    reason: "Case exists to probe the 160-char boundary with a real booking URL and asserts its own limit."
+  - id: "102"
+    field: max_chars
+    reason: "Case exists to probe merge-field expansion against the boundary and asserts its own limit."

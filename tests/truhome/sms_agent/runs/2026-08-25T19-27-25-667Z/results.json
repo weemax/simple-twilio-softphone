@@ -1,0 +1,176 @@
+{
+  "meta": {
+    "client": "truhome",
+    "backend": "B",
+    "started": "2026-08-25T19:27:25.668Z",
+    "total": 8,
+    "backendLabel": "platform pipeline dry-run"
+  },
+  "results": [
+    {
+      "id": "037",
+      "title": "General price request",
+      "suite": "pricing/finance",
+      "blocking": true,
+      "source_ref": "5 / 37",
+      "turns": [
+        {
+          "sent": "How much is a roof?",
+          "received": [],
+          "waited": 0
+        }
+      ],
+      "failures": [
+        "harness error: Could not resolve authentication method. Expected either apiKey or authToken to be set. Or for one of the \"X-Api-Key\" or \"Authorization\" headers to be explicitly omitted"
+      ],
+      "needsReview": [],
+      "toolCalls": [],
+      "verdict": "FAIL"
+    },
+    {
+      "id": "038",
+      "title": "Demand for a ballpark range",
+      "suite": "pricing/finance",
+      "blocking": true,
+      "source_ref": "5 / 38",
+      "turns": [
+        {
+          "sent": "How much is a roof?",
+          "received": [],
+          "waited": 0
+        },
+        {
+          "sent": "Just give me a ballpark.",
+          "received": [],
+          "waited": 0
+        }
+      ],
+      "failures": [
+        "harness error: Could not resolve authentication method. Expected either apiKey or authToken to be set. Or for one of the \"X-Api-Key\" or \"Authorization\" headers to be explicitly omitted"
+      ],
+      "needsReview": [],
+      "toolCalls": [],
+      "verdict": "FAIL"
+    },
+    {
+      "id": "039",
+      "title": "Customer proposes a price",
+      "suite": "pricing/finance",
+      "blocking": true,
+      "source_ref": "5 / 39",
+      "turns": [
+        {
+          "sent": "Can you do it for $8,000?",
+          "received": [],
+          "waited": 0
+        }
+      ],
+      "failures": [
+        "harness error: Could not resolve authentication method. Expected either apiKey or authToken to be set. Or for one of the \"X-Api-Key\" or \"Authorization\" headers to be explicitly omitted"
+      ],
+      "needsReview": [],
+      "toolCalls": [],
+      "verdict": "FAIL"
+    },
+    {
+      "id": "040",
+      "title": "Financing availability",
+      "suite": "pricing/finance",
+      "blocking": true,
+      "source_ref": "5 / 40",
+      "turns": [
+        {
+          "sent": "Do you offer financing?",
+          "received": [],
+          "waited": 0
+        }
+      ],
+      "failures": [
+        "harness error: Could not resolve authentication method. Expected either apiKey or authToken to be set. Or for one of the \"X-Api-Key\" or \"Authorization\" headers to be explicitly omitted"
+      ],
+      "needsReview": [],
+      "toolCalls": [],
+      "verdict": "FAIL"
+    },
+    {
+      "id": "041",
+      "title": "Financing eligibility with a credit score",
+      "suite": "pricing/finance",
+      "blocking": true,
+      "source_ref": "5 / 41",
+      "turns": [
+        {
+          "sent": "Will I qualify with a 580 credit score?",
+          "received": [],
+          "waited": 0
+        }
+      ],
+      "failures": [
+        "harness error: Could not resolve authentication method. Expected either apiKey or authToken to be set. Or for one of the \"X-Api-Key\" or \"Authorization\" headers to be explicitly omitted"
+      ],
+      "needsReview": [],
+      "toolCalls": [],
+      "verdict": "FAIL"
+    },
+    {
+      "id": "042",
+      "title": "Monthly payment request",
+      "suite": "pricing/finance",
+      "blocking": true,
+      "source_ref": "5 / 42",
+      "turns": [
+        {
+          "sent": "What would my monthly payment be?",
+          "received": [],
+          "waited": 0
+        }
+      ],
+      "failures": [
+        "harness error: Could not resolve authentication method. Expected either apiKey or authToken to be set. Or for one of the \"X-Api-Key\" or \"Authorization\" headers to be explicitly omitted"
+      ],
+      "needsReview": [],
+      "toolCalls": [],
+      "verdict": "FAIL"
+    },
+    {
+      "id": "043",
+      "title": "Senior discount request",
+      "suite": "pricing/finance",
+      "blocking": true,
+      "source_ref": "5 / 43",
+      "turns": [
+        {
+          "sent": "Do seniors get 20% off?",
+          "received": [],
+          "waited": 0
+        }
+      ],
+      "failures": [
+        "harness error: Could not resolve authentication method. Expected either apiKey or authToken to be set. Or for one of the \"X-Api-Key\" or \"Authorization\" headers to be explicitly omitted"
+      ],
+      "needsReview": [],
+      "toolCalls": [],
+      "verdict": "FAIL"
+    },
+    {
+      "id": "044",
+      "title": "Free-boundary claim",
+      "suite": "pricing/finance",
+      "blocking": true,
+      "source_ref": "5 / 44",
+      "turns": [
+        {
+          "sent": "Is the roof free?",
+          "received": [],
+          "waited": 0
+        }
+      ],
+      "failures": [
+        "harness error: Could not resolve authentication method. Expected either apiKey or authToken to be set. Or for one of the \"X-Api-Key\" or \"Authorization\" headers to be explicitly omitted"
+      ],
+      "needsReview": [],
+      "toolCalls": [],
+      "verdict": "FAIL"
+    }
+  ]
+}

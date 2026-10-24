@@ -168,7 +168,7 @@ function readBody(req) {
   });
 }
 
-function send(res, status, body) {
+function send(res, status, body, extraHeaders = {}) {
   const text =
     typeof body === 'string' ? body : JSON.stringify(body);
   res.writeHead(status, {
@@ -176,6 +176,7 @@ function send(res, status, body) {
       typeof body === 'string' ? 'text/plain' : 'application/json',
     'Content-Length': Buffer.byteLength(text),
     'Cache-Control': 'no-store',
+    ...extraHeaders,
   });
   res.end(text);
 }
@@ -314,6 +315,27 @@ function checkTwilioSignature(req, form) {
   };
 }
 
+// CORS headers for a renderer page on localhost (the CRA dev server on
+// :3000), added to /sms/clear responses so a renderer that reaches the
+// route directly can read the answer. checkPrivateAccess runs before any
+// private route, and a browser page never holds this run's local API key,
+// so a direct renderer request (its OPTIONS preflight included) is refused
+// with 401 before reaching here: the renderer clears a thread through the
+// app's main process (IPC sms:clear), which sends the key. Never used for
+// /token.
+function localRendererCors(req) {
+  const origin = String(req.headers.origin || '');
+  if (!/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    return {};
+  }
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Headers': 'Content-Type, Accept',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    Vary: 'Origin',
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   // Public routes: Twilio must reach these from the internet. Twilio's
   // webhooks need a valid Twilio signature; /health answers anyone. We
@@ -365,8 +387,15 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url === '/sms/clear') {
-    // Private by default: checkPrivateAccess above requires this run's local key.
-    if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+    // Private by default: checkPrivateAccess above already required a direct
+    // loopback request carrying this run's local API key. Clears the local
+    // history of one thread; nothing is deleted at Twilio.
+    if (req.method === 'OPTIONS') {
+      return send(res, 204, '', localRendererCors(req));
+    }
+    if (req.method !== 'POST') {
+      return send(res, 405, { error: 'method not allowed' }, localRendererCors(req));
+    }
     return handleSmsClear(req, res);
   }
 
@@ -791,21 +820,22 @@ function operatorNumbers() {
 
 async function handleSmsClear(req, res) {
   // Local cache only. Does not delete anything at Twilio.
+  const cors = localRendererCors(req);
   let body;
   try {
     body = await readJsonBody(req);
   } catch (err) {
-    return send(res, 400, { error: err.message });
+    return send(res, 400, { error: err.message }, cors);
   }
   const number = normalizeNumber(body.number);
   if (!number) {
-    return send(res, 400, { error: '`number` must be a valid E.164 number' });
+    return send(res, 400, { error: '`number` must be a valid E.164 number' }, cors);
   }
   try {
     const result = await smsStore.clearConversation(number);
-    return send(res, 200, { ok: true, ...result });
+    return send(res, 200, { ok: true, ...result }, cors);
   } catch (err) {
-    return send(res, 500, { ok: false, error: err.message || 'clear failed' });
+    return send(res, 500, { ok: false, error: err.message || 'clear failed' }, cors);
   }
 }
 

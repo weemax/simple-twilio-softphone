@@ -1,0 +1,17 @@
+id: "066"
+title: First refusal to provide address
+suite: required-field-refusal
+source_ref: "8 / 66"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "I'd rather not give my address"
+    expect:
+      max_messages: 1
+      max_questions: 1
+      must:
+        - "Explains briefly why the address is needed"
+        - "Asks for the address once more"

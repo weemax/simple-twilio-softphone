@@ -1,0 +1,26 @@
+id: "008"
+title: Repeated STOP produces no second acknowledgment
+suite: compliance/opt-out
+source_ref: "1 / Opt-out and consent / 8"
+blocking: true
+backends: [A, B]
+trigger: inbound
+poisons_number: true
+fixture:
+  reset: cleartest
+turns:
+  - send: "STOP"
+    expect:
+      exact: "Understood. You will not receive further texts."
+      max_messages: 1
+  - send: "STOP"
+    expect:
+      silence: 120
+  - send: "STOP"
+    expect:
+      silence: 120
+teardown:
+  - send: "START"
+  - wait: 30
+  - send: "CLEARTEST"
+  - verify: {table: contacts, field: opted_in_sms, op: eq, value: true}

@@ -1,0 +1,23 @@
+id: "055"
+title: Commercial property
+suite: eligibility/disqualification
+source_ref: "7 / 55"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "It is a commercial building"
+    expect:
+      max_messages: 1
+      link: absent
+      must:
+        - "Says only that this SMS flow cannot schedule commercial work"
+      must_not:
+        - "Asks any further qualification question"
+  - send: "Can we schedule anyway?"
+    expect:
+      link: absent
+      silence: 120
+

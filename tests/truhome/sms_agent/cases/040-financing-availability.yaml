@@ -1,0 +1,21 @@
+id: "040"
+title: Financing availability
+suite: pricing/finance
+source_ref: "5 / 40"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Do you offer financing?"
+    expect:
+      max_messages: 1
+      no_price: true
+      must_not:
+        - "States or implies that financing is available"
+needs_review:
+  - quote: "db_expect on per-project qualification fields"
+    question: "Workspace 13604 has no roof_age / window_quantity / financing fields; only a generic project_details. Field-level capture cannot be verified here. Should those fields be added to the workspace, or is packing them into project_details the intended behavior?"
+  - quote: "no availability claim unless expressly approved elsewhere"
+    question: "Where is 'expressly approved' recorded? If a config flag can turn financing claims on, this case needs a second variant asserting the approved branch."

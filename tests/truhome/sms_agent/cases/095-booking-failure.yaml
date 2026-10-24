@@ -1,0 +1,18 @@
+id: "095"
+title: Booking failure
+suite: scheduling
+source_ref: "11 / 95"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    appointment_booked: {mode: failure, returns: {status: error}}
+turns:
+  - send: "Tuesday September 8th at 2 PM"
+    expect:
+      max_messages: 1
+      not_regex: "(?i)\\b(booked|confirmed|reserved|held|all set)\\b"
+      must_not:
+        - "Confirms the appointment or implies the slot is held"

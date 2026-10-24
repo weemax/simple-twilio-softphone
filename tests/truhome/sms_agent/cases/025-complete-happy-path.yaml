@@ -1,0 +1,32 @@
+id: "025"
+title: Complete happy path, PROJECT through CONSULT
+suite: qualification/happy-path
+source_ref: "3 / 25"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    check_service_area: {mode: success, returns: {is_supported: true, service_region: "Central IL"}}
+    appointment_booked: {mode: blocked}
+turns:
+  - send: "I need a new roof"
+    expect: {link: absent, max_questions: 1}
+  - send: "About 12 years old"
+    expect: {link: absent, max_questions: 1}
+  - send: "No leaks, no storm damage"
+    expect: {link: absent, max_questions: 1}
+  - send: "I own it, it's my primary home"
+    expect: {link: absent, max_questions: 1}
+  - send: "123 Main St, Springfield, IL 62704"
+    expect: {max_questions: 1}
+  - send: "Yes, both of us can be there"
+    expect:
+      link: present
+      must:
+        - "Offers scheduling only after every prior stage is satisfied"
+needs_review:
+  - quote: "link appears only after all eight stages, coverage, and SMS eligibility pass"
+    question: "The doc names eight stages but does not list them. Which eight, in order? Until they are named this case asserts link-absent on every turn before the last, which is weaker than checking each stage gate."
+notes: "appointment_booked stubbed `blocked` so a live workspace calendar is never touched."

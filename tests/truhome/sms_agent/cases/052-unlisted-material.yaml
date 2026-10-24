@@ -1,0 +1,20 @@
+id: "052"
+title: Unlisted material
+suite: product/boundaries
+source_ref: "6 / 52"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Can you install cedar siding?"
+    expect:
+      max_messages: 1
+      must:
+        - "Says a specialist will confirm"
+      must_not:
+        - "Ends the conversation or states the material is unsupported"
+db_expect:
+  - {table: contacts, field: lead_status, op: ne, value: Disqualified}
+notes: "'Do not silently disqualify' needs the db check; silence about it in the reply is exactly the failure mode."

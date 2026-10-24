@@ -102,7 +102,11 @@ function request(targetPort, { method = 'GET', path: p, headers = {}, body }) {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
         res.on('end', () =>
-          resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') })
+          resolve({
+            status: res.statusCode,
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString('utf8'),
+          })
         );
       }
     );
@@ -569,6 +573,48 @@ describe('workspace private routes', () => {
     expect(clear.cleared).toBe(true);
     expect(storedMessages()[FICTIONAL_NUMBER].messages).toEqual([]);
     for (const number of Object.keys(before).filter(n=>n!==FICTIONAL_NUMBER)) expect(storedMessages()[number]).toEqual(before[number]);
+  });
+});
+
+// A renderer page on localhost reaches /sms/clear only with this run's local
+// key, which the app's main process holds. Without it the page is refused,
+// its CORS preflight included, and a refusal grants no CORS header.
+describe('renderer access to clearing a thread', () => {
+  it('refuses a renderer page on localhost without the key, CORS preflight included', async () => {
+    const before = storedMessages();
+    const origin = { Origin: 'http://localhost:3000' };
+
+    const preflight = await request(port, {
+      method: 'OPTIONS',
+      path: '/sms/clear',
+      headers: {
+        ...origin,
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'content-type',
+      },
+    });
+    const clear = await request(port, {
+      method: 'POST',
+      path: '/sms/clear',
+      headers: { ...json, ...origin },
+      body: JSON.stringify({ number: FICTIONAL_NUMBER }),
+    });
+
+    expect([preflight.status, clear.status]).toEqual([401, 401]);
+    for (const r of [preflight, clear]) {
+      expect(r.headers['access-control-allow-origin']).toBeUndefined();
+    }
+    expect(storedMessages()).toEqual(before);
+  });
+
+  it('refuses to clear a thread for a number that is not a phone number', async () => {
+    const before = storedMessages();
+
+    await expect(smsBroker.clearConversation('not-a-number')).rejects.toThrow(
+      'SMS backend 400'
+    );
+
+    expect(storedMessages()).toEqual(before);
   });
 });
 

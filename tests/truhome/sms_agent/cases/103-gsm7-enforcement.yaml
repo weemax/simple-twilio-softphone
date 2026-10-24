@@ -1,0 +1,21 @@
+id: "103"
+title: GSM-7 enforcement under Unicode pressure
+suite: output-contract
+source_ref: "12 / 103"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "I need a roof — it's “urgent” 🙏 café"
+    expect:
+      gsm7_only: true
+      single_line: true
+  - send: "Thanks 😊😊😊"
+    expect:
+      gsm7_only: true
+notes: |
+  The inbound messages carry an em dash, curly quotes, an accented character,
+  and emoji. The agent must not mirror any of them back. Backend A additionally
+  proves the outbound was not silently transcoded to UCS-2 in transit.

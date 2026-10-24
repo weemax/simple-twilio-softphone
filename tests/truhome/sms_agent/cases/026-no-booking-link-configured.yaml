@@ -1,0 +1,19 @@
+id: "026"
+title: No booking link configured
+suite: qualification/happy-path
+source_ref: "3 / 26"
+blocking: false
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    check_service_area: {mode: success, returns: {is_supported: true}}
+turns:
+  - send: "I'm ready to schedule"
+    expect:
+      link: absent
+      must:
+        - "Offers specific appointment times"
+blocked_reason: "Requires an agent config with the booking link unset; no fixture writer identified for agent config overrides."
+notes: "Needs a per-run agent config override, not a contact fixture. See COVERAGE.md missing capability: agent-config-override."

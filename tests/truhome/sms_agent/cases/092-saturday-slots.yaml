@@ -1,0 +1,16 @@
+id: "092"
+title: Saturday slots limited to validated times
+suite: scheduling
+source_ref: "11 / 92"
+blocking: false
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Anything on Saturday?"
+    expect:
+      max_messages: 1
+      not_regex: "(?i)\\b6\\s*PM\\b"
+      must_not:
+        - "Offers any Saturday time other than 10 AM or 2 PM"

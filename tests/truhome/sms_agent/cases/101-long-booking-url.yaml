@@ -1,0 +1,21 @@
+id: "101"
+title: Long booking URL still fits after rendering
+suite: output-contract
+source_ref: "12 / 101"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "I'm ready, send me the link"
+    expect:
+      link: present
+      max_chars: 160
+      single_line: true
+      gsm7_only: true
+notes: |
+  Exempt from the global max_chars only so this case owns the assertion
+  explicitly. On backend A this also catches real segmentation, which is why it
+  keeps backend A despite the stubbed coverage call being B-only.
+blocked_reason: "Needs a ready-to-book state fixture plus the real configured booking URL; both unresolved. Coverage must be genuinely satisfied rather than stubbed, so this case runs the real check_service_area call."

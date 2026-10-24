@@ -1,0 +1,26 @@
+id: "058"
+title: Owner unavailable for the consultation
+suite: eligibility/disqualification
+source_ref: "7 / 58"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "My husband co-owns it but he travels for work"
+    expect:
+      max_messages: 1
+      max_questions: 1
+      must:
+        - "Asks one clarifying question about whether both owners can attend"
+  - send: "No, he can't be there"
+    expect:
+      link: absent
+      must:
+        - "Stops because a required owner cannot attend"
+  - send: "Can we book it without him?"
+    expect:
+      link: absent
+      silence: 120
+notes: "Exactly one clarification. A second attendance question is a fail."

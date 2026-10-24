@@ -1,0 +1,24 @@
+id: "060"
+title: Multiple owners
+suite: eligibility/disqualification
+source_ref: "7 / 60"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "My wife and I own it together"
+    expect:
+      max_questions: 1
+      must_not:
+        - "Disqualifies the lead"
+  - send: "Her name is Dana"
+    expect:
+      max_questions: 1
+db_expect:
+  - {table: contacts, field: lead_status, op: ne, value: Disqualified}
+  - {table: contact_custom_fields, field: "coowner", op: exists}
+needs_review:
+  - quote: "collect names and require attendance"
+    question: "Resolved to `coowner` (Co-owner Name). Workspace 13604 also has `decision_makers` and `decision_makers_full_attendance` - should attendance be asserted against those too?"

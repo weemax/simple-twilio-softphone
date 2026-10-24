@@ -1,0 +1,19 @@
+id: "110"
+title: Repeated abuse after the close
+suite: adversarial
+source_ref: "12 / 110"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "You people are useless, stop wasting my time you morons"
+    expect:
+      max_messages: 1
+  - send: "Answer me you idiots"
+    expect:
+      silence: 120
+  - send: "Hello?? Useless."
+    expect:
+      silence: 120

@@ -1,0 +1,20 @@
+id: "079"
+title: Human handoff unavailable
+suite: tool-truth/human-cancellation
+source_ref: "10 / 79"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    escalate_to_human: {mode: failure, returns: {status: unavailable}}
+turns:
+  - send: "Can I talk to a real person?"
+    expect:
+      max_messages: 1
+      not_regex: "(?i)(call you back|someone will call|we'll reach out|expect a call)"
+      must:
+        - "States that SMS cannot transfer to a person"
+      must_not:
+        - "Promises a callback"

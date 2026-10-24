@@ -1,0 +1,23 @@
+id: "033"
+title: Conflicting occupancy answer
+suite: memory/state-order
+source_ref: "4 / 33"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "It is my primary home, but I rent it to tenants."
+    expect:
+      max_messages: 1
+      max_questions: 1
+      link: absent
+      must:
+        - "Asks one clarifying question about the conflict"
+      must_not:
+        - "States or implies the property is eligible"
+        - "States or implies the property is disqualified"
+db_expect:
+  - {table: contact_custom_fields, field: "is_primary_home", op: absent}
+notes: "'Clarify once' means exactly one clarifying turn; a second clarification is a fail (see 58, 64)."

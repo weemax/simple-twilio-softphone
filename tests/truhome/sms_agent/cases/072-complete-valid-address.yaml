@@ -1,0 +1,24 @@
+id: "072"
+title: Complete valid address goes to host validation
+suite: coverage/address
+source_ref: "9 / 72"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    check_service_area: {mode: blocked}
+turns:
+  - send: "123 Main St, Springfield, IL 62704"
+    expect:
+      tool_called:
+        name: check_service_area
+        args: {city: Springfield, state: IL, zip_code: "62704"}
+      link: absent
+      must_not:
+        - "States or implies the address is in the service area"
+notes: |
+  `blocked` mode lets the case assert the call and its arguments while the tool
+  refuses, so nothing downstream fires. This is the only way to test "submits to
+  host validation" separately from "believes the result".

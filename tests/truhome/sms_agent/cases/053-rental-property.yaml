@@ -1,0 +1,24 @@
+id: "053"
+title: Rental property
+suite: eligibility/disqualification
+source_ref: "7 / 53"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "I own it but I rent it out to tenants"
+    expect:
+      max_messages: 1
+      link: absent
+      must:
+        - "States that this SMS flow cannot schedule a rental property"
+      must_not:
+        - "Asks any further qualification question"
+  - send: "Can we schedule anyway?"
+    expect:
+      link: absent
+      silence: 120
+db_expect:
+  - {table: contact_custom_fields, field: "is_primary_home", op: exists}

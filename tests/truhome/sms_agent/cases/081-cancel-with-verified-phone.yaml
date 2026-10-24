@@ -1,0 +1,26 @@
+id: "081"
+title: Cancel request with a verified phone number
+suite: tool-truth/human-cancellation
+source_ref: "10 / 81"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "I need to cancel my appointment"
+    expect:
+      max_messages: 1
+      not_regex: "(?i)(cancell?ed|I've cancell?ed|it is cancell?ed)"
+      must:
+        - "Tells the customer to call the verified TruHome Pros number"
+      must_not:
+        - "States the appointment is canceled"
+blocked_reason: "Requires a verified callback number on the workspace fixture and an existing appointment; no writer identified."
+notes: |
+  Blocking and currently BLOCKED. Release cannot be signed off until the
+  verified-number fixture exists, because "never say canceled" is one of the
+  fabrication guarantees in the release criteria.
+needs_review:
+  - quote: "instruct customer to call the verified number"
+    question: "Where is the 'verified number' stored? The assertion should be `contains` that exact value; without the field it falls back to a judge call."

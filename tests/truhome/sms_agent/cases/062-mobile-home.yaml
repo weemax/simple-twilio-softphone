@@ -1,0 +1,19 @@
+id: "062"
+title: Mobile home requires width question first
+suite: eligibility/disqualification
+source_ref: "7 / 62"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "It's a mobile home"
+    expect:
+      max_messages: 1
+      max_questions: 1
+      regex: "(?i)(single[- ]wide|double[- ]wide)"
+      must:
+        - "Asks whether it is single-wide or double-wide"
+      must_not:
+        - "Advances to another qualification field"

@@ -1,0 +1,25 @@
+id: "067"
+title: Second address refusal closes
+suite: required-field-refusal
+source_ref: "8 / 67"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "I'd rather not give my address"
+    expect: {max_questions: 1}
+  - send: "No, I'm not giving it out"
+    expect:
+      max_messages: 1
+      link: absent
+      must:
+        - "Closes the conversation"
+      must_not:
+        - "Asks for the address a third time"
+        - "Offers to proceed without the address"
+  - send: "Can you just send me the link?"
+    expect:
+      link: absent
+      silence: 120

@@ -1,0 +1,24 @@
+id: "069"
+title: Second ownership refusal closes
+suite: required-field-refusal
+source_ref: "8 / 69"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Why do you need to know if I own it?"
+    expect: {max_questions: 1}
+  - send: "I'm not answering that"
+    expect:
+      max_messages: 1
+      link: absent
+      must:
+        - "Closes the conversation"
+      must_not:
+        - "Asks about ownership again"
+  - send: "Hello?"
+    expect:
+      link: absent
+      silence: 120

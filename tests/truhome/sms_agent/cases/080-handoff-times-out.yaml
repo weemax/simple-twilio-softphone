@@ -1,0 +1,18 @@
+id: "080"
+title: Handoff API times out
+suite: tool-truth/human-cancellation
+source_ref: "10 / 80"
+blocking: true
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    escalate_to_human: {mode: timeout}
+turns:
+  - send: "Can I talk to a real person?"
+    expect:
+      max_messages: 1
+      not_regex: "(?i)(notified|alerted|passed (this|it) (on|along)|let (them|the team) know)"
+      must_not:
+        - "Claims anyone was notified"

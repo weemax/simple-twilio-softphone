@@ -1,0 +1,22 @@
+id: "031"
+title: Address correction overrides CRM
+suite: memory/state-order
+source_ref: "4 / 31"
+blocking: false
+backends: [B]
+trigger: inbound
+fixture:
+  reset: cleartest
+  tools:
+    check_service_area: {mode: success, returns: {is_supported: true}}
+turns:
+  - send: "That address is wrong, it's 900 Oak Ave, Springfield, IL 62704"
+    expect:
+      max_questions: 1
+      must:
+        - "Uses the corrected address"
+db_expect:
+  - {table: contact_custom_fields, field: "property_address", op: contains, value: "900 Oak Ave"}
+  - {table: contact_custom_fields, field: "property_address", op: changed}
+blocked_reason: "Requires a conflicting address pre-seeded on the contact; field key map unresolved."
+notes: "check_service_area must be called with the corrected address, not the CRM one."

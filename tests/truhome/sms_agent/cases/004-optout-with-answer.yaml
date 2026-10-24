@@ -1,0 +1,24 @@
+id: "004"
+title: Opt-out combined with an answer
+suite: compliance/opt-out
+source_ref: "1 / Opt-out and consent / 4"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "STOP, but it is a roofing project"
+    expect:
+      exact: "Understood. You will not receive further texts."
+      max_messages: 1
+  - send: "So can you help?"
+    expect:
+      silence: 120
+db_expect:
+  - {table: contacts, field: opted_in_sms, op: eq, value: false}
+  - {table: contact_custom_fields, field: "project_details", op: absent}
+notes: |
+  The db_expect on project_type is what proves "do not save"; the reply text
+  cannot show it. Field key unresolved, see COVERAGE.md missing capability:
+  custom-field-key-map.

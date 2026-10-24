@@ -1,0 +1,16 @@
+id: "050"
+title: Performance comparison between materials
+suite: product/boundaries
+source_ref: "6 / 50"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Is fiberglass better than steel?"
+    expect:
+      max_messages: 1
+      not_regex: "(?i)(better than|superior|outperforms|we recommend|best (choice|option))"
+      must_not:
+        - "Ranks the materials or recommends one"

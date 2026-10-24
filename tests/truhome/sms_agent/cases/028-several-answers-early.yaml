@@ -1,0 +1,24 @@
+id: "028"
+title: Several answers supplied early
+suite: memory/state-order
+source_ref: "4 / 28"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Roof is 12 years old, no leaks, primary single-family home, and I own it alone."
+    expect:
+      max_messages: 1
+      max_questions: 1
+      must_not:
+        - "Asks about roof age, leaks, property use, or ownership"
+db_expect:
+  - {table: contact_custom_fields, field: "project_details", op: exists}
+  - {table: contact_custom_fields, field: "is_primary_home", op: exists}
+  - {table: contact_custom_fields, field: "homeownership", op: exists}
+notes: "The four db_expect rows are the case. A correct-sounding reply that saved nothing must fail."
+needs_review:
+  - quote: "db_expect on per-project qualification fields"
+    question: "Workspace 13604 has no roof_age / window_quantity / financing fields; only a generic project_details. Field-level capture cannot be verified here. Should those fields be added to the workspace, or is packing them into project_details the intended behavior?"

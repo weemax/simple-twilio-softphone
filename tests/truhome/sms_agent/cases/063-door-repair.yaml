@@ -1,0 +1,23 @@
+id: "063"
+title: Door repair rather than replacement
+suite: eligibility/disqualification
+source_ref: "7 / 63"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "I just need my door repaired, not replaced"
+    expect:
+      max_messages: 1
+      link: absent
+      must:
+        - "States that only replacement is supported"
+      must_not:
+        - "Asks any further qualification question"
+  - send: "Can we schedule anyway?"
+    expect:
+      link: absent
+      silence: 120
+

@@ -1,0 +1,20 @@
+id: "032"
+title: Ambiguous answer does not complete a field
+suite: memory/state-order
+source_ref: "4 / 32"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "I need a new roof"
+    expect: {max_questions: 1}
+  - send: "Probably"
+    expect:
+      max_questions: 1
+      must:
+        - "Re-asks or clarifies the field the previous question was about"
+needs_review:
+  - quote: "Expected: do not mark the current field complete."
+    question: "Which field is current here depends on what the agent asked at turn 1. The db_expect cannot name a field until the question order in case 19 is pinned. Should this case pin a specific field instead?"

@@ -1,0 +1,23 @@
+id: "064"
+title: Unsupported flooring or solar
+suite: eligibility/disqualification
+source_ref: "7 / 64"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Do you do solar panels?"
+    expect:
+      max_messages: 1
+      link: absent
+      must:
+        - "States the service limit"
+  - send: "So that's a no?"
+    expect:
+      link: absent
+      silence: 120
+needs_review:
+  - quote: "clarify once if ambiguous; otherwise state limit and stop"
+    question: "Solar is unambiguous, so this compiles the 'otherwise' branch. Should a second case cover the ambiguous branch, and what input counts as ambiguous?"

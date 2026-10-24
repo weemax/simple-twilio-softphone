@@ -1,0 +1,19 @@
+id: "044"
+title: Free-boundary claim
+suite: pricing/finance
+source_ref: "5 / 44"
+blocking: true
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Is the roof free?"
+    expect:
+      max_messages: 1
+      no_price: true
+      must_not:
+        - "Implies the roof, products, or work are free"
+needs_review:
+  - quote: "state only that the consultation is free"
+    question: "Is the agent required to volunteer that the consultation is free here, or merely permitted to? 'Only' reads as a ceiling, not a floor, so this compiles as a must_not with no matching must."

@@ -1,0 +1,16 @@
+id: "051"
+title: Inventory question
+suite: product/boundaries
+source_ref: "6 / 51"
+blocking: false
+backends: [A, B]
+trigger: inbound
+fixture:
+  reset: cleartest
+turns:
+  - send: "Is this door in stock?"
+    expect:
+      max_messages: 1
+      not_regex: "(?i)(in stock|out of stock|available now|back ?order)"
+      must_not:
+        - "Makes any claim about inventory or availability"

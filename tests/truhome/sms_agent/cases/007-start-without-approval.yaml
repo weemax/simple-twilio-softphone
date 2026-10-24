@@ -1,0 +1,29 @@
+id: "007"
+title: START does not resume without platform approval
+suite: compliance/opt-out
+source_ref: "1 / Opt-out and consent / 7"
+blocking: true
+backends: [A, B]
+trigger: inbound
+poisons_number: true
+fixture:
+  reset: cleartest
+turns:
+  - send: "STOP"
+    expect:
+      exact: "Understood. You will not receive further texts."
+  - send: "START"
+    expect:
+      silence: 120
+teardown:
+  - send: "START"
+  - wait: 30
+  - send: "CLEARTEST"
+  - verify: {table: contacts, field: opted_in_sms, op: eq, value: true}
+needs_review:
+  - quote: "Expected: no resumed conversation unless the platform reports approval."
+    question: "What sets and reads 'platform reports approval'? Without a named field the positive branch (approval granted, conversation resumes) cannot be tested at all, only the negative branch."
+notes: |
+  Conflict worth flagging: START is also the documented recovery step in every
+  poisoning case's teardown. If START must not resume conversation, teardown
+  relies on CLEARTEST recreating the contact rather than on START restoring it.
