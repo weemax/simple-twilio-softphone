@@ -95,7 +95,7 @@ curl -H "ngrok-skip-browser-warning: true" https://YOUR-DOMAIN.ngrok-free.app/he
 
 **Only the webhooks answer through the tunnel.** `/twiml`, `/`, `/sms/inbound`, `/sms/status` and `/health` are the public routes (`PUBLIC_ROUTES` in `server/server.js`). Every other route is private: the tunnel connects from 127.0.0.1, so the server also refuses any private request that carries forwarding headers (`X-Forwarded-*`, `Forwarded`, `Via`, `CF-Connecting-IP`) or a non-loopback `Host`, and requires the local API key the server writes to `server/.local-api-key` on each start (only the Electron main process reads it). Through the tunnel:
 ```bash
-curl -X POST https://YOUR-DOMAIN.ngrok-free.app/token
+curl -X POST -H "ngrok-skip-browser-warning: true" https://YOUR-DOMAIN.ngrok-free.app/token
 # expect: 403 {"error":"private route: not reachable through a tunnel or proxy"}
 ```
 
