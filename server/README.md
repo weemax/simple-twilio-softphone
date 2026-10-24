@@ -108,9 +108,15 @@ updates. Without both, the server refuses every webhook (see
   `https://YOUR-DOMAIN.ngrok-free.app`. The status callback for outbound
   SMS is derived from it too (`<base>/sms/status`). The older name
   `SMS_PUBLIC_BASE_URL` still works. Under `npm run phone` (project root)
-  you do not need it: the launcher reads the address ngrok assigned and
-  passes it, with `SMS_STATUS_CALLBACK_URL=<address>/sms/status`, in this
-  server's environment, which `server/.env` never overrides.
+  you do not need it: the launcher passes the tunnel's address, with
+  `SMS_STATUS_CALLBACK_URL=<address>/sms/status`, in this server's
+  environment, which `server/.env` never overrides. That address is
+  `NGROK_URL` when you set it (the launcher starts ngrok on it with `--url`,
+  and refuses a different `PUBLIC_BASE_URL`), else the address ngrok assigned.
+- `NGROK_URL` — optional, read by `npm run phone` only: your ngrok dev domain
+  as an https address with no path, e.g. `https://abc123xyz.ngrok-free.dev`
+  (ngrok dashboard → Gateway → Domains). Without it ngrok picks a new address
+  each launch.
 
 ### .env.example
 

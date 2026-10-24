@@ -107,7 +107,30 @@ function readServiceSettings(envFile, env) {
     notes,
     port: Number.isInteger(port) && port > 0 ? port : null,
     publicBaseUrl: value('PUBLIC_BASE_URL') || value('SMS_PUBLIC_BASE_URL') || null,
+    ngrokUrl: value('NGROK_URL') || null,
   };
+}
+
+// The fixed ngrok address (NGROK_URL or --ngrok-url): the https origin of the
+// person's dev domain. Returns { url } (null when none was set) or { problem }.
+function fixedNgrokAddress(raw, source) {
+  if (!raw) return { url: null };
+  let u = null;
+  try {
+    u = new URL(String(raw).trim());
+  } catch (_) {
+    u = null;
+  }
+  const bare = u && (u.pathname === '/' || u.pathname === '') && !u.search && !u.hash && !u.username && !u.password;
+  if (!u || u.protocol !== 'https:' || !bare) {
+    return {
+      problem: {
+        what: `${source} is ${raw}, which is not an https address with no path.`,
+        fix: 'Use your ngrok dev domain, for example NGROK_URL=https://abc123xyz.ngrok-free.dev in server/.env, then run npm run phone again.',
+      },
+    };
+  }
+  return { url: u.origin };
 }
 
 function canListen(port, host) {
@@ -209,6 +232,7 @@ module.exports = {
   electronExecutable,
   parseEnvFile,
   readServiceSettings,
+  fixedNgrokAddress,
   portInUse,
   portOccupant,
   get,

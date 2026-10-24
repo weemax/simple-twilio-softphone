@@ -106,6 +106,18 @@ function routeSummary(route, noun) {
   return `Goes to ${route.description}, not Operator: ${noun} will not reach this app.`;
 }
 
+// The Voice URL on Operator's own TwiML App, as the last check or Connect saw
+// it (server/setup.js), against this session's tunnel. Blank until Connect has
+// run. The path is server/setup.js VOICE_PATH.
+export function voiceUrlSummary(voiceUrl, status) {
+  if (!voiceUrl) return 'Not set yet. Open Twilio account and connect to create Operator’s TwiML App.';
+  const tunnelUrl = status && status.tunnel && status.tunnel.url;
+  if (!tunnelUrl) return `${voiceUrl}. No tunnel address this session to compare it with.`;
+  const expected = `${tunnelUrl}/twiml`;
+  if (voiceUrl === expected) return `${voiceUrl} matches this session’s address.`;
+  return `${voiceUrl} does not match this session’s address (${expected}). Operator corrects it when npm run phone starts.`;
+}
+
 export function ConnectionPanel({ status, voice, sms, setup }) {
   const service = serviceSummary(status);
   const tunnel = tunnelSummary(status);
@@ -138,6 +150,8 @@ export function ConnectionPanel({ status, voice, sms, setup }) {
             ? callback.url
             : 'No public address: delivery updates for texts you send will not arrive.'}
         </dd>
+        <dt>Voice URL</dt>
+        <dd>{voiceUrlSummary(conn.voiceUrl, status)}</dd>
         <dt>Message updates</dt>
         <dd>
           {sms.lastError ||

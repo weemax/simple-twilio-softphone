@@ -84,6 +84,7 @@ function resolveOptions(options) {
     envFile: options.envFile || path.join(projectDir, 'server', '.env'),
     servicePort: options.servicePort || null,
     reactPort: options.reactPort || null,
+    ngrokUrl: options.ngrokUrl || null,
     ngrokPath: options.ngrokPath,
     checkInstalls: options.checkInstalls !== false,
     handleSignals: options.handleSignals !== false,
@@ -282,6 +283,23 @@ class PhoneSession {
     }
     const settings = checks.readServiceSettings(o.envFile, o.env);
     if (settings.problems.length) return this.refuse(settings.problems, 'Nothing was started.');
+    const fixed = checks.fixedNgrokAddress(
+      o.ngrokUrl || settings.ngrokUrl,
+      o.ngrokUrl ? 'The --ngrok-url option' : 'NGROK_URL in server/.env'
+    );
+    if (fixed.problem) return this.refuse([fixed.problem], 'Nothing was started.');
+    if (fixed.url && settings.publicBaseUrl && settings.publicBaseUrl.replace(/\/+$/, '') !== fixed.url) {
+      return this.refuse(
+        [
+          {
+            what: `server/.env has PUBLIC_BASE_URL=${settings.publicBaseUrl}, but the fixed ngrok address is ${fixed.url}. Only one of them can be right.`,
+            fix: `Set PUBLIC_BASE_URL to ${fixed.url}, or remove it from server/.env, then run npm run phone again.`,
+          },
+        ],
+        'Nothing was started.'
+      );
+    }
+    this.fixedAddress = fixed.url;
     this.settings = settings;
     this.servicePort = o.servicePort || settings.port || 5050;
     this.reactPort = o.reactPort || 3000;
@@ -395,6 +413,7 @@ class PhoneSession {
         env: o.env,
         timeoutMs: o.timeouts.tunnel,
         onLog: (text) => this.line('ngrok', text),
+        fixedUrl: this.fixedAddress,
         onSpawned: (proc) => this.adopt(proc),
         shouldStop: () => Boolean(this.stopRequested),
       });

@@ -80,7 +80,7 @@ const api = {
   setup: {
     // Presence of each credential, never a value: { ok, credentials,
     // accountSid, hasAuthToken, number, identity, publicBaseUrl,
-    // connected, connection: { account, voice, sms, callback, mms } }.
+    // connected, connection: { account, voice, sms, voiceUrl, callback, mms } }.
     status: () => ipcRenderer.invoke('setup:status'),
     // input: { accountSid?, authToken?, publicBaseUrl? }. Blank fields use
     // what server/.env already holds. One read-only request to Twilio;

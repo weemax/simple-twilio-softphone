@@ -12,7 +12,7 @@
 // stand-ins in launcher/test-fakes that never reach a network: the fake
 // ngrok's "public" address is a local proxy. All values are fictional.
 
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const net = require('net');
@@ -204,7 +204,8 @@ describe('npm run phone', () => {
     const ready = await run.ready;
     expect(ready).not.toBeNull();
     const ngrokSaw = readJson(files.ngrok);
-    expect(ngrokSaw.args.slice(0, 2)).toEqual(['http', `127.0.0.1:${options.servicePort}`]);
+    // No fixed address set: ngrok is started exactly as before, with no --url.
+    expect(ngrokSaw.args).toEqual(['http', `127.0.0.1:${options.servicePort}`, '--log', 'stdout', '--log-format', 'json']);
     expect(ready.tunnel).toEqual({ state: 'ready', url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/) });
 
     // The app opened only after the page and this launch's service answered,
@@ -425,6 +426,104 @@ describe('npm run phone', () => {
     expect(await run.done).toBe(1);
     expect(run.out.text).toContain('Operator is already open outside npm run phone');
     expect(allGone(run.spawned.map((s) => s.pid))).toBe(true);
+  });
+});
+
+// A fixed ngrok address (NGROK_URL in server/.env, or --ngrok-url): ngrok is
+// started on it, the service checks Twilio against it, and nothing else is
+// used. The domain is .invalid, so it can never resolve: the stand-in cannot
+// serve it, and the reachability check fails with that reason. The live
+// check, one launch and one call, is the one that reaches the real domain.
+describe('a fixed ngrok address (NGROK_URL or --ngrok-url)', () => {
+  const FIXED = 'https://fictional-fixed-domain.invalid';
+  const NO_PUBLIC_BASE_URL = { ...SETTINGS, PUBLIC_BASE_URL: '' };
+
+  test('ngrok is started on that address, and the service checks Twilio against it', async () => {
+    const { files, options } = await setup({ settings: { ...NO_PUBLIC_BASE_URL, NGROK_URL: FIXED } });
+    const run = launch(options);
+    const ready = await run.ready;
+
+    expect(readJson(files.ngrok).args).toEqual([
+      'http',
+      `127.0.0.1:${options.servicePort}`,
+      '--url',
+      FIXED,
+      '--log',
+      'stdout',
+      '--log-format',
+      'json',
+    ]);
+    expect(ready.tunnel).toEqual({
+      state: 'unreachable',
+      url: FIXED,
+      reason: expect.stringContaining('ngrok started, but the address could not be reached'),
+    });
+    expect(readJson(files.electron).session.tunnel).toEqual(expect.objectContaining({ state: 'unreachable', url: FIXED }));
+
+    // Delivery updates signed for the fixed address are accepted by the service
+    // this launch started; ones signed for the old random address are refused.
+    const params = { MessageSid: 'SM00000000000000000000000000000008', MessageStatus: 'delivered' };
+    const localStatus = `http://127.0.0.1:${options.servicePort}/sms/status`;
+    expect(await postSigned(localStatus, `${FIXED}/sms/status`, params)).toBe(200);
+    expect(await postSigned(localStatus, `${OLD_ADDRESS}/sms/status`, params)).toBe(403);
+
+    run.stop('test');
+    expect(await run.done).toBe(0);
+  });
+
+  test('--ngrok-url sets the same address for one run, without a setting in server/.env', async () => {
+    const { files, options } = await setup({ settings: NO_PUBLIC_BASE_URL });
+    const run = launch({ ...options, ngrokUrl: FIXED });
+    const ready = await run.ready;
+
+    expect(readJson(files.ngrok).args).toEqual(expect.arrayContaining(['--url', FIXED]));
+    expect(ready.tunnel).toEqual(expect.objectContaining({ state: 'unreachable', url: FIXED }));
+    run.stop('test');
+    expect(await run.done).toBe(0);
+  });
+
+  test('--ngrok-url with no address is refused by the command line before anything starts', () => {
+    const result = spawnSync(process.execPath, [path.join(ROOT, 'launcher', 'phone.js'), '--ngrok-url'], {
+      encoding: 'utf8',
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('--ngrok-url needs an https address');
+  });
+
+  test.each([
+    ['NGROK_URL is not https', { settings: { NGROK_URL: 'http://fictional-fixed-domain.invalid' } }, 'NGROK_URL in server/.env is http://fictional-fixed-domain.invalid, which is not an https address with no path.'],
+    ['NGROK_URL has a path', { settings: { NGROK_URL: `${FIXED}/twiml` } }, `NGROK_URL in server/.env is ${FIXED}/twiml, which is not an https address with no path.`],
+    ['--ngrok-url has a path', { ngrokUrl: `${FIXED}/twiml` }, `The --ngrok-url option is ${FIXED}/twiml, which is not an https address with no path.`],
+    ['server/.env names another address', { settings: { NGROK_URL: FIXED, PUBLIC_BASE_URL: OLD_ADDRESS } }, `server/.env has PUBLIC_BASE_URL=${OLD_ADDRESS}, but the fixed ngrok address is ${FIXED}. Only one of them can be right.`],
+  ])('%s: nothing starts, and the fix is named', async (_name, how, what) => {
+    const { files, options } = await setup({ settings: { ...NO_PUBLIC_BASE_URL, ...(how.settings || {}) } });
+    const run = launch({ ...options, ngrokUrl: how.ngrokUrl });
+    expect(await run.done).toBe(1);
+    expect(run.spawned).toEqual([]);
+    expect(run.out.text).toContain(what);
+    expect(run.out.text).toContain('Nothing was started.');
+    expect(run.out.text).toContain('Fix: ');
+    expect(fs.existsSync(files.ngrok)).toBe(false);
+  });
+
+  test.each([
+    ['ngrok opens another address', { FAKE_NGROK_MODE: 'other-address' }, `instead of the fixed address ${FIXED}`],
+    ['the domain is not on the account', { FAKE_NGROK_MODE: 'not-on-account' }, EXPLANATIONS.ERR_NGROK_320],
+  ])('%s: the app opens without a tunnel, and no other address is used', async (_name, env, reason) => {
+    const { files, options } = await setup({ settings: { ...NO_PUBLIC_BASE_URL, NGROK_URL: FIXED }, env });
+    const run = launch(options);
+    const ready = await run.ready;
+
+    expect(readJson(files.ngrok).args).toContain(FIXED);
+    expect(ready.tunnel.state).toBe('unavailable');
+    expect(ready.tunnel.reason).toContain(reason);
+    expect(ready.tunnel.url).toBeUndefined();
+    const app = readJson(files.electron);
+    expect(app.health).toEqual(expect.objectContaining({ ok: true, launch: ready.launchId }));
+    expect(app.session.tunnel.url).toBeUndefined();
+    expect(run.out.text).toContain(TUNNEL_LIMITS);
+    run.stop('test');
+    expect(await run.done).toBe(0);
   });
 });
 
