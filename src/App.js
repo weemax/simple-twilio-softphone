@@ -4,6 +4,8 @@ import { SmsProvider, useSms } from './contexts/SmsContext';
 import { WorkspaceProvider, useWorkspace } from './workspace/WorkspaceContext';
 import { normalizePhone, unreadCount } from './workspace/model';
 import { Contacts } from './workspace/Contacts';
+import { CallQueue } from './workspace/CallQueue';
+import { useCallQueue } from './workspace/useCallQueue';
 import { ConfirmDialog } from './workspace/ConfirmDialog';
 import {
   ConnectionPanel,
@@ -36,6 +38,7 @@ function MainPanel() {
     [callError, setCallError] = useState(''),
     [calling, setCalling] = useState(false),
     [settingsView, setSettingsView] = useState('connection');
+  const queueApi = useCallQueue({ externalBusy: calling });
   const readConfig = useCallback(async () => {
     try {
       const cfg = await window.operator.config.get();
@@ -131,7 +134,9 @@ function MainPanel() {
       calling ||
       snapshot.connecting ||
       snapshot.currentCall ||
-      snapshot.incomingCall
+      snapshot.incomingCall ||
+      queueApi.starting ||
+      queueApi.queue.active
     )
       return;
     setCalling(true);
@@ -168,7 +173,10 @@ function MainPanel() {
     snapshot.state !== 'registered' ||
     Boolean(activeCall) ||
     snapshot.connecting ||
-    calling;
+    calling ||
+    queueApi.starting ||
+    Boolean(queueApi.queue.active);
+  const queued = queueApi.queue.items.length + (queueApi.queue.active ? 1 : 0);
   const unread = data.seeded
     ? (sms.conversations || []).reduce((n, c) => n + unreadCount(c, data), 0)
     : 0;
@@ -225,6 +233,14 @@ function MainPanel() {
                   {unread}
                 </span>
               )}
+              {v === 'calls' && queued > 0 && (
+                <span
+                  className="badge"
+                  aria-label={`${queued} contacts in the call queue`}
+                >
+                  {queued}
+                </span>
+              )}
               {v === 'settings' && !configured && (
                 <span className="badge">!</span>
               )}
@@ -241,10 +257,23 @@ function MainPanel() {
             <SmsPanel
               active={view === 'messages' && !pendingIncoming}
               onCall={requestCall}
+              onQueue={(number) =>
+                queueApi.enqueue([
+                  {
+                    number,
+                    name: nameFor(number),
+                    contactId: data.contacts.find((c) => c.number === number)?.id,
+                  },
+                ]).message
+              }
             />
           </div>
           <div hidden={view !== 'contacts'}>
-            <Contacts onText={openText} onCall={requestCall} />
+            <Contacts
+              onText={openText}
+              onCall={requestCall}
+              onQueue={queueApi.enqueue}
+            />
           </div>
           <section
             className="workspace-page calls-page"
@@ -253,7 +282,7 @@ function MainPanel() {
           >
             <h2>Calls</h2>
             <div className="button-row subnav">
-              {['dialer', 'recents'].map((v) => (
+              {['queue', 'dialer', 'recents'].map((v) => (
                 <button
                   key={v}
                   type="button"
@@ -261,9 +290,23 @@ function MainPanel() {
                   className={callsView === v ? 'active' : ''}
                   onClick={() => setCallsView(v)}
                 >
-                  {v === 'dialer' ? 'Dialer' : 'Recents'}
+                  {v === 'queue' ? 'Queue' : v === 'dialer' ? 'Dialer' : 'Recents'}
+                  {v === 'queue' && queued > 0 && (
+                    <span className="badge">{queued}</span>
+                  )}
                 </button>
               ))}
+            </div>
+            <div hidden={callsView !== 'queue'}>
+              <CallQueue
+                queueApi={queueApi}
+                voiceStatus={
+                  snapshot.currentCall
+                    ? `Call status: ${snapshot.currentCall.status}`
+                    : ''
+                }
+                onAddContacts={() => navigate('contacts')}
+              />
             </div>
             <div className="dialer" hidden={callsView !== 'dialer'}>
               <Dialpad

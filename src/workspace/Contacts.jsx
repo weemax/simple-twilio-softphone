@@ -4,7 +4,7 @@ import { parseCsv, reviewCsv, saveContact } from './model';
 import { formatNumber } from '../formatNumber';
 import { ConfirmDialog } from './ConfirmDialog';
 
-export function Contacts({ onText, onCall }) {
+export function Contacts({ onText, onCall, onQueue }) {
   const { data, update } = useWorkspace();
   const [query, setQuery] = useState(''),
     [editing, setEditing] = useState(null),
@@ -15,7 +15,8 @@ export function Contacts({ onText, onCall }) {
   const [csv, setCsv] = useState(null),
     [nameCol, setNameCol] = useState(0),
     [phoneCol, setPhoneCol] = useState(1),
-    [notice, setNotice] = useState('');
+    [notice, setNotice] = useState(''),
+    [picked, setPicked] = useState([]);
   const rows = csv ? reviewCsv(csv, nameCol, phoneCol, data.contacts) : [];
   const newRows = rows.filter((r) => r.status === 'New');
   const review = () => {
@@ -64,6 +65,20 @@ export function Contacts({ onText, onCall }) {
     );
     cancelImport();
   }
+  const entry = (c) => ({ number: c.number, name: c.name, contactId: c.id });
+  const queueContacts = (list) => {
+    setNotice(onQueue(list.map(entry)).message);
+    setPicked([]);
+  };
+  const shown = data.contacts.filter((c) =>
+    (c.name + ' ' + c.number).toLowerCase().includes(query.toLowerCase()),
+  );
+  const pickedContacts = data.contacts.filter((c) => picked.includes(c.id));
+  const queuedNumbers = new Set(
+    [...data.queue.items, ...(data.queue.active ? [data.queue.active] : [])].map(
+      (i) => i.number,
+    ),
+  );
   return (
     <section
       className="contacts workspace-page"
@@ -106,6 +121,32 @@ export function Contacts({ onText, onCall }) {
         />
       </label>
       {notice && <p role="status">{notice}</p>}
+      {data.contacts.length > 0 && (
+        <div className="button-row contact-selection">
+          <button
+            type="button"
+            className="primary"
+            disabled={!pickedContacts.length}
+            onClick={() => queueContacts(pickedContacts)}
+          >
+            Queue selected ({pickedContacts.length})
+          </button>
+          <button
+            type="button"
+            disabled={!shown.length}
+            onClick={() => setPicked(shown.map((c) => c.id))}
+          >
+            Select all shown
+          </button>
+          <button
+            type="button"
+            disabled={!picked.length}
+            onClick={() => setPicked([])}
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
       {editing && (
         <form className="panel contact-form" onSubmit={submit}>
           <h3>{editing.id ? 'Edit contact' : 'Add contact'}</h3>
@@ -285,23 +326,41 @@ export function Contacts({ onText, onCall }) {
         </section>
       )}
       <div className="contact-grid">
-        {data.contacts
-          .filter((c) =>
-            (c.name + ' ' + c.number)
-              .toLowerCase()
-              .includes(query.toLowerCase()),
-          )
-          .map((c) => (
+        {shown.map((c) => (
             <article
               className="panel contact-card"
               key={c.id}
               aria-label={c.name}
             >
+              <label className="contact-pick">
+                <input
+                  type="checkbox"
+                  checked={picked.includes(c.id)}
+                  onChange={(e) =>
+                    setPicked((p) =>
+                      e.target.checked
+                        ? [...p, c.id]
+                        : p.filter((id) => id !== c.id),
+                    )
+                  }
+                />
+                <span className="visually-hidden">Select {c.name}</span>
+              </label>
               <h3>{c.name}</h3>
               <p className="phone-number">{formatNumber(c.number)}</p>
+              {queuedNumbers.has(c.number) && (
+                <p className="muted small">In the call queue</p>
+              )}
               <div className="button-row">
                 <button type="button" onClick={() => onCall(c.number)}>
                   Call
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Add ${c.name} to queue`}
+                  onClick={() => queueContacts([c])}
+                >
+                  Add to queue
                 </button>
                 <button type="button" onClick={() => onText(c.number)}>
                   Text

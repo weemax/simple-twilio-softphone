@@ -1,6 +1,6 @@
 # Isolated workspace verification
 
-These launchers exercise accepted TWP-9 **piece 3** without real credentials,
+These launchers exercise accepted TWP-9 **pieces 3 and 5** without real credentials,
 provider requests, OS notifications, public tunnels or keychain access. Never run
 an automated journey against the installed app or a real data profile.
 
@@ -49,6 +49,13 @@ two recipient drafts across navigation/restart, incoming call interruption,
 search-to-message, archive/restore, unread/notification deduplication and routing,
 failed/unknown outcomes, keyboard sending, mute/DTMF/hangup/recents, reading position,
 narrow list/detail, confirmed local clearing and contact removal preserving history.
+
+The last group covers the manual contact queue (piece 5): selecting and adding contacts and
+a thread, deduplication, ordering and restart persistence, a stale destination needing review,
+one press dialing exactly the visible contact (a double press makes one call), an incoming call
+blocking dialing, the far end or the person ending a call without anyone else being dialed, and
+a restart during a call recording it as interrupted without redialing. The fictional Voice SDK
+records every dial in `window.__fixture.calls`; no real call is possible.
 
 ## Actual Electron with real IPC and persistence
 

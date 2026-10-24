@@ -12,7 +12,7 @@ fs.mkdirSync(out, { recursive: true });
 const sdk = `
 class Events { constructor(){this.events={}} on(e,f){(this.events[e] ||= []).push(f)} emit(e,...a){(this.events[e]||[]).forEach(f=>f(...a))} }
 class Call extends Events {constructor(to, incoming=false){super();this.parameters={To:to,From:incoming?to:'client:operator-demo',CallSid:'CAfixture'+Date.now()};this.direction=incoming?'INCOMING':'OUTGOING';this.s=incoming?'pending':'open';this.m=false;}status(){return this.s}isMuted(){return this.m}mute(v){this.m=v}accept(){this.s='open';this.emit('accept')}reject(){this.s='closed';this.emit('reject')}disconnect(){this.s='closed';this.emit('disconnect')}sendDigits(d){window.__fixture.digits.push(d)}}
-export class Device extends Events {constructor(){super();this.state='unregistered';window.__fixture.device=this}async register(){this.state='registered';this.emit('registered')}async destroy(){}async connect({params}){window.__fixture.calls.push(params.To);return new Call(params.To)}updateToken(){}}
+export class Device extends Events {constructor(){super();this.state='unregistered';window.__fixture.device=this}async register(){this.state='registered';this.emit('registered')}async destroy(){}async connect({params}){window.__fixture.calls.push(params.To);const c=new Call(params.To);window.__fixture.activeCall=c;return c}updateToken(){}}
 window.__fixture.incoming=(n)=>{const call=new Call(n,true);window.__fixture.incomingCall=call;window.__fixture.device.emit('incoming',call)};
 `;
 fs.writeFileSync(path.join(out, 'sdk.js'), sdk);

@@ -33,7 +33,7 @@ This project is a fork of Kevin Whinnery's abandoned [operator](https://github.c
 | SMS: read receipts, typing indicators, group threads | out of scope |
 | One-command startup (`npm run phone`) | working — starts the local service, React, ngrok and the desktop app, waits for each to answer, and stops only what it started; see Quick start |
 | SMS: photos (MMS) to and from US and Canadian numbers | working — JPEG/PNG, up to 10, under 5 MB with the text, **needs the public tunnel** for sending (24-hour links); see Photos |
-| Manual contact queue | accepted as a separate implementation piece; see `docs/phone-ux-plan.md` |
+| Manual contact queue (Calls → Queue) | implemented locally; every contact needs its own **Call next** press, nothing advances, redials or resumes by itself; see Daily workspace |
 | Phone number management UI | not implemented (planned) |
 | Private routes (`/token`, `/sms/send`, `/sms/conversations`) closed to the tunnel | working — tunneled requests get 403; the app's main process uses a per-start local API key |
 | Twilio webhook signature verification (`/twiml`, `/sms/inbound`, `/sms/status`) | working — requests without a valid Twilio signature over the exact public URL get 403; **requires `TWILIO_AUTH_TOKEN` and `PUBLIC_BASE_URL` in `server/.env`**, without which every webhook is refused (see `server/README.md`) |
@@ -178,6 +178,17 @@ in its existing server store; no history or secret migration runs.
   unknown and is never resent automatically. Check the Twilio message log.
 - Native SMS notification clicks focus this app and open the corresponding thread.
   History hydration does not alert; each newly observed inbound message alerts once.
+- **Calls → Queue** is a manual call list. Add contacts one at a time or select several in
+  Contacts (**Queue selected**), or add a conversation's number from its thread; the same
+  number is queued once. The next contact shows its name and number; **Call next** dials
+  exactly that contact with one press and no second dialog. When the call ends the outcome is
+  recorded and the following contact simply waits for another press: nothing advances,
+  redials or resumes on its own, including after hangup, a restart or an import. Reorder with
+  Move up/Move down, or Skip/Remove. An incoming call, a call in progress or a lost voice
+  connection blocks dialing and keeps every pending contact. Pending contacts are saved; a
+  call that was in progress when the app closed is recorded as interrupted. A contact that was
+  edited or removed after it was queued must be reviewed (**Use current details**, **Keep this
+  number** or **Remove from queue**) before it can be dialed. Queue changes never touch message drafts.
 - Recents include calls this running app observed. A closed app cannot record missed
   calls. Existing answer/decline, mute, hangup, duration and in-call DTMF remain.
 
