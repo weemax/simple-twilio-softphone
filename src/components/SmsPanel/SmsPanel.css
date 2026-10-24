@@ -166,35 +166,17 @@
   white-space: nowrap;
 }
 
-.sms-panel-thread-header .link {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text);
-  padding: 4px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-  flex-shrink: 0;
-}
-
-.sms-panel-thread-header .link:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent-hi);
-}
-
-.sms-panel-thread-header .link.danger {
+/* Destructive confirm in the thread header (clear local history). The
+   workspace's shared button look supplies size, fill and hover; this only
+   tints the danger action. */
+.sms-panel-thread-header button.danger {
   color: var(--danger);
   border-color: rgba(248, 81, 73, 0.45);
 }
 
-.sms-panel-thread-header .link.danger:hover:not(:disabled) {
+.sms-panel-thread-header button.danger:hover:not(:disabled) {
   border-color: var(--danger);
   color: #ffb4b0;
-}
-
-.sms-panel-thread-header .link:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
 .sms-thread-clear-prompt {
