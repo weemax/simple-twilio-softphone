@@ -125,6 +125,8 @@ export const emptyWorkspace = () => ({
   archived: {},
   scroll: {},
   recentCalls: [],
+  // Pending contacts, the one active call and its outcomes (see queue.js).
+  queue: { items: [], active: null, history: [] },
   selected: null,
   seeded: false,
   uncertain: {},

@@ -645,3 +645,51 @@
   margin: 8px 0;
   text-align: center;
 }
+
+/* Manual call queue (accepted TWP-9 piece 5). */
+.call-queue {
+  max-width: 720px;
+  margin: 0 auto;
+}
+.queue-next h3,
+.call-queue h3 {
+  margin: 0 0 6px;
+}
+.queue-next .button-row {
+  margin-top: 12px;
+}
+.queue-list,
+.queue-outcomes {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.queue-number {
+  min-width: 1.5em;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.queue-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0;
+}
+.queue-row > div:nth-child(2) {
+  flex: 1 1 220px;
+}
+.queue-review {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid rgba(210, 153, 34, 0.45);
+  border-radius: 6px;
+  background: rgba(210, 153, 34, 0.12);
+}
+.contact-selection {
+  margin: 10px 0;
+}
+.contact-pick {
+  float: right;
+}

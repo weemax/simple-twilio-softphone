@@ -80,6 +80,17 @@ async function stop(app) {
       (await window.operator.config.get('workspace')).drafts['+12025550102'] ===
       'Please confirm the address.',
   );
+  // A queued contact is saved by the same real write, and survives the restart.
+  await nav('Contacts').click();
+  await page
+    .getByRole('article', { name: 'Alex Rivera' })
+    .getByRole('button', { name: 'Add Alex Rivera to queue' })
+    .click();
+  await page.waitForFunction(
+    async () =>
+      (await window.operator.config.get('workspace')).queue.items.length === 1,
+  );
+  await nav('Messages').click();
   await stop(app);
   app = await launch();
   page = await app.firstWindow();
@@ -92,6 +103,11 @@ async function stop(app) {
     .filter({ hasText: 'Alex Rivera' })
     .click();
   assert.equal(await draft().inputValue(), 'Meet at 2?');
+  await nav('Calls').click();
+  await page.locator('.calls-page .subnav button').filter({ hasText: /^Queue/ }).click();
+  await page.getByRole('button', { name: /^Call next: Alex Rivera/ }).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.__fixture.calls), [], 'Reopening never calls anyone.');
+  await nav('Messages').click();
   await page.screenshot({ path: path.join(evidence, 'desktop-restart.png') });
   await page.evaluate(() =>
     window.operator.notifications.show({
@@ -144,6 +160,7 @@ async function stop(app) {
           'Contacts saved through real IPC',
           'Native-notification click handler opened its recipient through the real preload channel',
           'Two recipient drafts survived a complete process restart after IPC confirmed the write',
+          'A queued contact survived the restart and nothing was dialed',
           'Failed and unknown results persisted by the real backend and surfaced by the real broker',
           'Unknown text has no enabled Send action',
           'Atomic config file is owner-only',

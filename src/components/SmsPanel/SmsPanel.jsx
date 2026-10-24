@@ -357,7 +357,7 @@ function Composer({
   );
 }
 
-export function SmsPanel({ active = true, onCall = () => {} }) {
+export function SmsPanel({ active = true, onCall = () => {}, onQueue }) {
   const {
     snapshot,
     send,
@@ -369,8 +369,12 @@ export function SmsPanel({ active = true, onCall = () => {} }) {
     photoPolicy,
   } = useSms();
   const { data, update, nameFor } = useWorkspace();
+  const [queueNotice, setQueueNotice] = useState('');
   const session = useSessionStatus(10000);
   const selected = data.selected;
+  useEffect(() => {
+    setQueueNotice('');
+  }, [selected]);
   const [thread, setThread] = useState(null),
     [loading, setLoading] = useState(false),
     [threadError, setThreadError] = useState('');
@@ -929,6 +933,14 @@ export function SmsPanel({ active = true, onCall = () => {} }) {
                 <button type="button" onClick={() => onCall(selected)}>
                   Call
                 </button>
+                {onQueue && (
+                  <button
+                    type="button"
+                    onClick={() => setQueueNotice(onQueue(selected))}
+                  >
+                    Add to queue
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() =>
@@ -976,6 +988,11 @@ export function SmsPanel({ active = true, onCall = () => {} }) {
               </div>
             )}
           </div>
+          {queueNotice && selected && (
+            <p className="muted small queue-notice" role="status">
+              {queueNotice}
+            </p>
+          )}
           {data.archived[selected] && (
             <p className="muted small archive-notice">
               Archived · message history is preserved.

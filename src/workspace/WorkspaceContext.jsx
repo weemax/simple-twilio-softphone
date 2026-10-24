@@ -8,6 +8,7 @@ import React, {
 } from 'react';
 import { useSms } from '../contexts/SmsContext';
 import { emptyWorkspace, inboundIds } from './model';
+import { normalizeQueue } from './queue';
 
 const WorkspaceContext = createContext(null);
 export function WorkspaceProvider({ children }) {
@@ -26,6 +27,9 @@ export function WorkspaceProvider({ children }) {
           ...emptyWorkspace(),
           ...(saved && typeof saved === 'object' ? saved : {}),
         };
+        // Metadata saved before the queue existed has none; a call that was
+        // in progress when the app closed is recorded, never resumed.
+        next.queue = normalizeQueue(next.queue);
         current.current = next;
         setData(next);
         setReady(true);

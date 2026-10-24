@@ -343,3 +343,6 @@ export class TwilioService {
 }
 
 export const TwilioStates = STATE;
+
+// The id the finished-call record (`lastCall.id`) will carry for this call.
+export const callLocalId = (call) => call?.__localId || null;

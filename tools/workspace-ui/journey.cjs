@@ -438,6 +438,106 @@ let browser;
       await page.setViewportSize({ width: 1280, height: 800 });
     },
   );
+  await check(
+    'Manual contact queue: ordering, deduplication, one press per call, review, interruptions and restart',
+    async () => {
+      const calls = () => page.evaluate(() => window.__fixture.calls);
+      const queueRows = () => page.locator('.queue-list > li');
+      const rowNames = async () =>
+        (await queueRows().locator('strong').allTextContents());
+      const queueTab = () => page.locator('.calls-page .subnav button').filter({ hasText: /^Queue/ });
+      const callNext = () => page.getByRole('button', { name: /^Call next/ });
+      const dialog = () => page.getByRole('dialog', { name: 'Confirm call destination' });
+      const addContact = async (name, number) => {
+        await button('Add contact').click();
+        await page.getByLabel('Name', { exact: true }).fill(name);
+        await page.getByLabel('Phone number', { exact: true }).fill(number);
+        await button('Save contact').click();
+        await page.getByRole('article', { name }).waitFor();
+      };
+      const card = (name) => page.getByRole('article', { name });
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await nav('Contacts').click();
+      await addContact('Jamie Chen', '+12025550103');
+      await addContact('Sam Patel', '+12025550104');
+      // Select two contacts, then add a third on its own: one queue, in that order.
+      await page.getByLabel('Select Alex Rivera').check();
+      await page.getByLabel('Select Jamie Chen').check();
+      await button('Queue selected (2)').click();
+      await page.getByText(/2 contacts added to the queue/).waitFor();
+      await card('Sam Patel').getByRole('button', { name: 'Add Sam Patel to queue' }).click();
+      await card('Alex Rivera').getByRole('button', { name: 'Add Alex Rivera to queue' }).click();
+      await page.getByText(/Alex Rivera is already in the queue/).waitFor();
+      assert.deepEqual(await calls(), [], 'Adding contacts never dials.');
+      // A thread can be queued too (this number is not a contact).
+      await nav('Messages').click();
+      await inbox('0102').click();
+      await button('Add to queue').click();
+      await page.getByText(/added to the queue/).waitFor();
+      // Calls → Queue: ordering and deduplication.
+      await nav('Calls').click();
+      await queueTab().click();
+      assert.deepEqual(await rowNames(), ['Alex Rivera', 'Jamie Chen', 'Sam Patel', '+1 202 555 0102'].map((n) => n));
+      await page.getByRole('button', { name: 'Move Sam Patel up' }).click();
+      assert.deepEqual((await rowNames()).slice(0, 3), ['Alex Rivera', 'Sam Patel', 'Jamie Chen']);
+      await shot('queue-ordered');
+      await page.reload();
+      await nav('Calls').click();
+      await queueTab().click();
+      assert.deepEqual((await rowNames()).slice(0, 3), ['Alex Rivera', 'Sam Patel', 'Jamie Chen']);
+      // Edit Jamie after queueing: a stale destination needs review.
+      await nav('Contacts').click();
+      await card('Jamie Chen').getByRole('button', { name: 'Edit', exact: true }).click();
+      await page.getByLabel('Phone number', { exact: true }).fill('+12025550133');
+      await button('Save contact').click();
+      await nav('Calls').click();
+      await page.getByText(/changed after it was queued/).waitFor();
+      await shot('queue-review');
+      // One press dials exactly the visible contact, with no second dialog,
+      // and a double click makes one call.
+      await callNext().dblclick();
+      await page.getByRole('complementary', { name: 'Active call' }).waitFor();
+      assert.deepEqual(await calls(), ['+12025550101']);
+      assert.equal(await page.locator('.queue-outcomes li').count(), 0, 'The double press did not end the call.');
+      assert.equal(await dialog().count(), 0);
+      assert.equal(await callNext().count(), 0, 'No second Call next while a call is active.');
+      await shot('queue-active');
+      // The far end hangs up: the outcome is recorded and nobody is dialed.
+      await page.evaluate(() => window.__fixture.activeCall.disconnect());
+      await page.getByText(/Completed/).first().waitFor();
+      assert.deepEqual(await calls(), ['+12025550101']);
+      assert.equal(await callNext().isEnabled(), true);
+      assert.match(await callNext().getAttribute('aria-label'), /Sam Patel/);
+      // An incoming call blocks dialing and keeps every pending contact.
+      await page.evaluate(() => window.__fixture.incoming('+12025550102'));
+      await page.getByRole('complementary', { name: 'Incoming call' }).waitFor();
+      assert.equal(await callNext().isDisabled(), true);
+      await button('Decline').click();
+      await callNext().waitFor();
+      assert.equal(await callNext().isEnabled(), true);
+      assert.deepEqual(await rowNames(), ['Sam Patel', 'Jamie Chen', '+1 202 555 0102']);
+      // Sam is called, then hung up from the queue; Jamie must be reviewed first.
+      await callNext().click();
+      await page.getByRole('complementary', { name: 'Active call' }).getByRole('button', { name: 'Hang up' }).click();
+      await page.waitForFunction(() => document.querySelectorAll('.queue-outcomes li').length === 2);
+      assert.deepEqual(await calls(), ['+12025550101', '+12025550104']);
+      assert.equal(await callNext().isDisabled(), true);
+      await button('Use current details').click();
+      await callNext().click();
+      await page.getByRole('complementary', { name: 'Active call' }).waitFor();
+      assert.deepEqual(await calls(), ['+12025550101', '+12025550104', '+12025550133']);
+      // The app restarts during the call: nothing resumes or redials.
+      await page.reload();
+      await page.waitForFunction(() => window.__fixture?.device?.state === 'registered');
+      await nav('Calls').click();
+      await queueTab().click();
+      await page.getByText(/Interrupted: the app closed during this call/).waitFor();
+      assert.deepEqual(await rowNames(), ['+1 202 555 0102']);
+      assert.deepEqual(await calls(), [], 'Reopening never calls anyone.');
+      await shot('queue-after-restart');
+      assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('fixture-config')).workspace.drafts['+12025550101']), 'Meet at 2?');
+    },
+  );
   await nav('Settings').click();
   await shot('after-settings');
   assert.deepEqual(errors, []);
