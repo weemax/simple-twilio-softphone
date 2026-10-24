@@ -14,6 +14,7 @@
 const http = require('http');
 const https = require('https');
 const { URL } = require('url');
+const { localAuthHeaders } = require('./localApiAuth');
 
 const TOKEN_BACKEND_URL = process.env.TOKEN_BACKEND_URL || 'http://127.0.0.1:5050/token'; // default to local token server
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || '';
@@ -53,6 +54,7 @@ async function fetchFromBackend(identity) {
         headers: {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(body),
+          ...localAuthHeaders(url),
         },
         timeout: 5000,
       },

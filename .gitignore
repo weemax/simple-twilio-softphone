@@ -63,6 +63,10 @@ server/sms-store.json
 server/sms-store.json.corrupt-*
 server/sms-store.json.tmp
 
+# Per-start local API key for the token server's private routes
+server/.local-api-key
+server/.local-api-key.tmp
+
 # next.js build output
 .next
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.

@@ -5,10 +5,12 @@
 // the local server. This keeps the same trust model as tokenBroker.js:
 //   - Auth Token / API Secret stay in the main process or the server
 //   - The renderer can only invoke whitelisted channels
-//   - The local server enforces its own localhost guard
+//   - The local server only answers private routes for requests carrying
+//     its local API key (see localApiAuth.js)
 
 const http = require('http');
 const { URL } = require('url');
+const { localAuthHeaders } = require('./localApiAuth');
 
 const SMS_BACKEND_BASE =
   process.env.SMS_BACKEND_URL || 'http://127.0.0.1:5050';
@@ -25,6 +27,7 @@ function request(method, path, body) {
         path: url.pathname + (url.search || ''),
         headers: {
           Accept: 'application/json',
+          ...localAuthHeaders(url),
           ...(payload
             ? {
                 'Content-Type': 'application/json',
