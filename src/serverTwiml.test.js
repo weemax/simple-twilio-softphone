@@ -3,7 +3,7 @@ const previousOperatorIdentity = process.env.OPERATOR_IDENTITY;
 process.env.TWILIO_CALLER_ID = '+15551234567';
 process.env.OPERATOR_IDENTITY = 'operator';
 
-const { renderTwiml } = require('../server/server');
+const { renderTwiml, operatorNumbers } = require('../server/server');
 
 afterAll(() => {
   if (previousCallerId === undefined) delete process.env.TWILIO_CALLER_ID;
@@ -41,5 +41,14 @@ describe('outbound voice TwiML', () => {
 
     expect(xml).toContain('<Client>operator</Client>');
     expect(xml).not.toContain('answerOnBridge');
+  });
+});
+
+describe('operatorNumbers', () => {
+  it('exposes TWILIO_CALLER_ID as both callerId and smsFrom when SMS_FROM is unset', () => {
+    expect(operatorNumbers()).toEqual({
+      callerId: '+15551234567',
+      smsFrom: '+15551234567',
+    });
   });
 });

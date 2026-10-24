@@ -11,12 +11,23 @@
 
 import { SmsService } from './smsService';
 
-function makeFakeOperator({ listHandler, notificationsShow = () => Promise.resolve({ ok: true }) }) {
+function makeFakeOperator({
+  listHandler,
+  clearHandler,
+  meHandler,
+  notificationsShow = () => Promise.resolve({ ok: true }),
+}) {
   global.window = global.window || {};
   global.window.operator = {
     sms: {
       list: listHandler,
       send: () => Promise.resolve({ ok: true }),
+      clear:
+        clearHandler ||
+        (() => Promise.resolve({ ok: true, cleared: true, number: '+15550000000' })),
+      me:
+        meHandler ||
+        (() => Promise.resolve({ ok: true, callerId: null, smsFrom: null })),
     },
     notifications: { show: notificationsShow },
   };
@@ -25,6 +36,7 @@ function makeFakeOperator({ listHandler, notificationsShow = () => Promise.resol
 afterEach(() => {
   delete global.window;
   delete global.Audio;
+  delete global.fetch;
 });
 
 describe('SmsService inbound notification detection', () => {
@@ -96,6 +108,124 @@ describe('SmsService inbound notification detection', () => {
     await svc._refresh();
     expect(show).toHaveBeenCalledTimes(1);
     expect(AudioMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SmsService operator numbers', () => {
+  it('copies callerId and smsFrom from the list payload onto the snapshot', async () => {
+    makeFakeOperator({
+      listHandler: () =>
+        Promise.resolve({
+          ok: true,
+          conversations: [],
+          callerId: '+15551110000',
+          smsFrom: '+15552220000',
+        }),
+    });
+    const svc = new SmsService();
+    await svc._refresh();
+    expect(svc.snapshot()).toMatchObject({
+      callerId: '+15551110000',
+      smsFrom: '+15552220000',
+    });
+  });
+
+  it('copies callerId and smsFrom from /me', async () => {
+    makeFakeOperator({
+      listHandler: () => Promise.resolve({ ok: true, conversations: [] }),
+      meHandler: () =>
+        Promise.resolve({
+          ok: true,
+          callerId: '+12025550100',
+          smsFrom: '+12025550100',
+        }),
+    });
+    const svc = new SmsService();
+    await svc._refreshMe();
+    expect(svc.snapshot()).toMatchObject({
+      callerId: '+12025550100',
+      smsFrom: '+12025550100',
+    });
+  });
+
+  it('clears stored numbers when the list payload sends null', async () => {
+    makeFakeOperator({
+      listHandler: () =>
+        Promise.resolve({
+          ok: true,
+          conversations: [],
+          callerId: '+15551110000',
+          smsFrom: '+15552220000',
+        }),
+    });
+    const svc = new SmsService();
+    await svc._refresh();
+    window.operator.sms.list = () =>
+      Promise.resolve({
+        ok: true,
+        conversations: [],
+        callerId: null,
+        smsFrom: null,
+      });
+    await svc._refresh();
+    expect(svc.snapshot().callerId).toBeNull();
+    expect(svc.snapshot().smsFrom).toBeNull();
+  });
+});
+
+describe('SmsService.clearThread', () => {
+  it('calls sms.clear, refreshes the list, and returns an empty thread', async () => {
+    const clear = jest.fn(() =>
+      Promise.resolve({ ok: true, cleared: true, number: '+15550100' })
+    );
+    const list = jest.fn(() =>
+      Promise.resolve({
+        ok: true,
+        conversations: [
+          {
+            number: '+15550100',
+            lastMessageAt: 0,
+            lastBody: '',
+            lastDirection: null,
+            messageCount: 0,
+            messages: [],
+          },
+        ],
+      })
+    );
+    makeFakeOperator({ listHandler: list, clearHandler: clear });
+    const svc = new SmsService();
+    const thread = await svc.clearThread('+15550100');
+    expect(clear).toHaveBeenCalledWith({ number: '+15550100' });
+    expect(list).toHaveBeenCalled();
+    expect(thread).toEqual({
+      number: '+15550100',
+      lastMessageAt: 0,
+      lastBody: '',
+      lastDirection: null,
+      messageCount: 0,
+      messages: [],
+    });
+  });
+
+  // TWP-7's authenticated private boundary supersedes the adopted browser fallback.
+  it('never bypasses authentication when the desktop clearing handler is stale', async () => {
+    makeFakeOperator({
+      clearHandler: () => Promise.reject(new Error("No handler registered for sms:clear")),
+    });
+    global.fetch = jest.fn();
+    const svc = new SmsService();
+    await expect(svc.clearThread('+12025550101')).rejects.toThrow('No handler registered');
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('throws when the bridge reports failure', async () => {
+    makeFakeOperator({
+      listHandler: () => Promise.resolve({ ok: true, conversations: [] }),
+      clearHandler: () => Promise.resolve({ ok: false, error: 'nope' }),
+    });
+    const svc = new SmsService();
+    await expect(svc.clearThread('+15550100')).rejects.toThrow('nope');
   });
 });
 

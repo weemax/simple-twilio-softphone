@@ -335,6 +335,14 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, { ok: true, ts: Date.now() });
   }
 
+  if (url === '/me') {
+    // Private by default: checkPrivateAccess above protects sender metadata.
+    if (req.method !== 'GET') {
+      return send(res, 405, { error: 'method not allowed' });
+    }
+    return send(res, 200, { ok: true, ...operatorNumbers() });
+  }
+
   if (url === '/token') {
     if (req.method !== 'POST') {
       return send(res, 405, { error: 'method not allowed' });
@@ -354,6 +362,12 @@ const server = http.createServer(async (req, res) => {
       return send(res, 405, { error: 'method not allowed' });
     }
     return handleSmsList(req, res);
+  }
+
+  if (url === '/sms/clear') {
+    // Private by default: checkPrivateAccess above requires this run's local key.
+    if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+    return handleSmsClear(req, res);
   }
 
   return send(res, 404, { error: 'not found' });
@@ -643,6 +657,7 @@ async function handleSmsSend(req, res) {
     });
     return send(res, 500, {
       error: 'no outbound SMS number configured (set TWILIO_SMS_FROM or TWILIO_CALLER_ID)',
+      status: 'failed',
     });
   }
 
@@ -679,16 +694,18 @@ async function handleSmsSend(req, res) {
       status: result.status,
     });
   } catch (err) {
-    console.error('[sms] send failed:', err.message);
+    // A transport timeout or 5xx may have happened after Twilio accepted the message.
+    // Only an explicit rejection proves failure; never offer a resend for an unknown result.
+    const outcome = Number(err.status) >= 400 && Number(err.status) < 500 && Number(err.status) !== 408 ? 'failed' : 'unknown';
     await smsStore._withLock(() => {
       const conv = smsStore._data[to];
       if (conv) {
         const m = conv.messages.find((x) => x === placeholderMsg);
-        if (m) m.status = 'failed';
+        if (m) m.status = outcome;
         smsStore._persist();
       }
     });
-    return send(res, 502, { error: 'twilio send failed', detail: err.message });
+    return send(res, 502, { error: outcome === 'failed' ? 'Twilio rejected the message.' : 'The message outcome is unknown. Check the Twilio message log before resending.', status: outcome });
   }
 }
 
@@ -766,6 +783,32 @@ async function handleSmsStatus(params, res) {
   }
 }
 
+function operatorNumbers() {
+  const callerId = TWILIO_CALLER_ID || null;
+  const smsFrom = TWILIO_SMS_FROM || TWILIO_CALLER_ID || null;
+  return { callerId, smsFrom };
+}
+
+async function handleSmsClear(req, res) {
+  // Local cache only. Does not delete anything at Twilio.
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    return send(res, 400, { error: err.message });
+  }
+  const number = normalizeNumber(body.number);
+  if (!number) {
+    return send(res, 400, { error: '`number` must be a valid E.164 number' });
+  }
+  try {
+    const result = await smsStore.clearConversation(number);
+    return send(res, 200, { ok: true, ...result });
+  } catch (err) {
+    return send(res, 500, { ok: false, error: err.message || 'clear failed' });
+  }
+}
+
 function handleSmsList(req, res) {
   // Optional ?number=+1… to fetch a single thread in full.
   const url = new URL(req.url, 'http://localhost');
@@ -775,7 +818,13 @@ function handleSmsList(req, res) {
     if (!conv) return send(res, 404, { error: 'no such conversation' });
     return send(res, 200, conv);
   }
-  return send(res, 200, { conversations: smsStore.listConversations() });
+  // Include the operator's numbers so the renderer can show which
+  // number outbound SMS/calls present as. Not attached to a single
+  // thread fetch - that payload is the conversation itself.
+  return send(res, 200, {
+    conversations: smsStore.listConversations(),
+    ...operatorNumbers(),
+  });
 }
 
 // Listen, then issue this run's local API key. The key file is written only
@@ -799,7 +848,7 @@ function startServer({ port = PORT, host = HOST } = {}) {
   });
 }
 
-module.exports = { renderTwiml, startServer, PUBLIC_ROUTES };
+module.exports = { renderTwiml, startServer, PUBLIC_ROUTES, operatorNumbers };
 
 if (require.main === module) {
   requireEnv();

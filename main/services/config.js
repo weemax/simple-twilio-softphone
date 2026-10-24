@@ -17,9 +17,11 @@ function read() {
 }
 
 function write(cfg) {
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2), {
+  fs.writeFileSync(CONFIG_FILE + '.tmp', JSON.stringify(cfg, null, 2), {
     mode: 0o600,
   });
+  fs.chmodSync(CONFIG_FILE + '.tmp', 0o600);
+  fs.renameSync(CONFIG_FILE + '.tmp', CONFIG_FILE);
 }
 
 function get(key) {

@@ -14,6 +14,7 @@
 .sms-panel-header {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
@@ -26,6 +27,10 @@
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-dim);
+}
+
+.sms-panel-from {
+  font-variant-numeric: tabular-nums;
 }
 
 .sms-panel-header .spacer {
@@ -139,6 +144,9 @@
 }
 
 .sms-panel-thread-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 8px 14px;
   border-bottom: 1px solid var(--border);
   font-size: 13px;
@@ -146,8 +154,60 @@
   background: var(--bg-elev-2);
 }
 
+.sms-panel-thread-header .spacer {
+  flex: 1;
+}
+
 .sms-panel-thread-number {
   font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sms-panel-thread-header .link {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.sms-panel-thread-header .link:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-hi);
+}
+
+.sms-panel-thread-header .link.danger {
+  color: var(--danger);
+  border-color: rgba(248, 81, 73, 0.45);
+}
+
+.sms-panel-thread-header .link.danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: #ffb4b0;
+}
+
+.sms-panel-thread-header .link:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sms-thread-clear-prompt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.sms-thread-clear-error {
+  color: var(--danger);
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
 }
 
 /* --- list --- */

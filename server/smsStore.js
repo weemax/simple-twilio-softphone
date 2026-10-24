@@ -151,6 +151,35 @@ class SmsStore {
     });
   }
 
+  // Wipe every message in a thread. Keeps the conversation entry so the
+  // number stays in the list and a later send/inbound can reuse it.
+  clearConversation(number) {
+    const key = normalizeNumber(number);
+    if (!key) {
+      return Promise.reject(new Error('invalid phone number'));
+    }
+    return this._withLock(() => {
+      const conv = this._data[key];
+      if (!conv) {
+        return { cleared: false, number: key };
+      }
+      conv.messages = [];
+      conv.lastMessageAt = 0;
+      conv.lastBody = '';
+      conv.lastDirection = null;
+      this._persist();
+      return {
+        cleared: true,
+        number: key,
+        lastMessageAt: 0,
+        lastBody: '',
+        lastDirection: null,
+        messageCount: 0,
+        messages: [],
+      };
+    });
+  }
+
   // For tests / future "mark read".
   markRead(number) {
     const key = normalizeNumber(number);

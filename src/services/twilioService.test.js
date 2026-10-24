@@ -87,3 +87,20 @@ describe('TwilioService call state snapshots', () => {
     });
   });
 });
+
+// Accepted TWP-9 piece 3: incoming calls stay usable and recents reflect observed outcomes.
+describe('observed call history',()=>{
+  it('records a missed incoming call once and clears both call slots after an answered call ends',()=>{
+    const service=new TwilioService();
+    const missed=new FakeCall('pending');missed.direction='INCOMING';missed.parameters.From='+12025550101';
+    service._onIncoming(missed);missed.emit('cancel');
+    expect(service.snapshot().lastCall).toMatchObject({number:'+12025550101',direction:'incoming',outcome:'missed'});
+    const call=new FakeCall('pending');call.direction='INCOMING';call.parameters.From='+12025550102';
+    service._onIncoming(call);call.statusValue='open';call.emit('accept');
+    expect(service.snapshot().incomingCall).toBeNull();expect(service.snapshot().currentCall.from).toBe('+12025550102');
+    call.emit('disconnect');
+    expect(service.snapshot().incomingCall).toBeNull();expect(service.snapshot().currentCall).toBeNull();
+    expect(service.snapshot().lastCall.outcome).toBe('completed');
+    const id=service.snapshot().lastCall.id;call.emit('disconnect');expect(service.snapshot().lastCall.id).toBe(id);
+  });
+});

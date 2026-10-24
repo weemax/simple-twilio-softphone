@@ -24,6 +24,8 @@ export class SmsService {
     this.conversations = []; // newest-first, from /sms/conversations
     this.state = 'idle'; // 'idle' | 'ready' | 'error'
     this.lastError = null;
+    this.callerId = null; // TWILIO_CALLER_ID from the token server
+    this.smsFrom = null; // TWILIO_SMS_FROM, else callerId
     this._listeners = new Set();
     this._pollTimer = null;
     // Message SIDs are stable across conversation reordering. Keep this set
@@ -48,7 +50,10 @@ export class SmsService {
     return {
       conversations: this.conversations,
       state: this.state,
+      hydrated: this._hasHydrated,
       lastError: this.lastError,
+      callerId: this.callerId,
+      smsFrom: this.smsFrom,
     };
   }
 
@@ -58,6 +63,9 @@ export class SmsService {
     if (this._pollTimer) return; // already running
     this.lastError = null;
     this.state = 'ready';
+    await this._refreshMe().catch(() => {
+      // /me is optional; the list payload also carries the numbers.
+    });
     await this._refresh().catch((err) => {
       this.lastError = err.message;
       this.state = 'error';
@@ -104,8 +112,29 @@ export class SmsService {
       : [];
     this._detectNewInboundMessages(conversations);
     this.conversations = conversations;
+    this._applyOperatorNumbers(res);
     this.state = 'ready';
     this.lastError = null;
+    this._emit();
+  }
+
+  _applyOperatorNumbers(src) {
+    if (!src || typeof src !== 'object') return;
+    if ('callerId' in src) {
+      this.callerId = typeof src.callerId === 'string' ? src.callerId : null;
+    }
+    if ('smsFrom' in src) {
+      this.smsFrom = typeof src.smsFrom === 'string' ? src.smsFrom : null;
+    }
+  }
+
+  async _refreshMe() {
+    if (!window.operator || !window.operator.sms || typeof window.operator.sms.me !== 'function') {
+      return;
+    }
+    const me = await window.operator.sms.me();
+    if (!me || !me.ok) return;
+    this._applyOperatorNumbers(me);
     this._emit();
   }
 
@@ -209,7 +238,9 @@ export class SmsService {
       const msg = (res && res.error) || 'send failed';
       this.lastError = msg;
       this._emit();
-      throw new Error(msg);
+      const error = new Error(msg);
+      error.outcome = res?.status === 'failed' ? 'failed' : 'unknown';
+      throw error;
     }
     // Refresh right away so the local thread shows the new outbound
     // without waiting for the next poll.
@@ -217,5 +248,28 @@ export class SmsService {
       // Refresh failure is non-fatal; next poll will catch up.
     });
     return res;
+  }
+
+  async clearThread(number) {
+    if (!number || typeof number !== 'string') {
+      throw new Error('number is required');
+    }
+    if (typeof window.operator?.sms?.clear !== 'function') {
+      throw new Error('Restart the app to enable authenticated local history clearing.');
+    }
+    const res = await window.operator.sms.clear({ number });
+    if (!res || !res.ok) throw new Error(res?.error || 'Could not clear local history.');
+    // Refresh the conversation list so the sidebar preview matches.
+    await this._refresh().catch(() => {
+      // Non-fatal; next poll will catch up.
+    });
+    return {
+      number: res.number || number,
+      lastMessageAt: 0,
+      lastBody: '',
+      lastDirection: null,
+      messageCount: 0,
+      messages: [],
+    };
   }
 }

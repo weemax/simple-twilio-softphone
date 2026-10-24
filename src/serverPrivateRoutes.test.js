@@ -15,6 +15,16 @@
 // documents (checked against Twilio's own worked example below).
 // Fake credentials and fictional data only; nothing here reaches Twilio.
 
+// TWP-9 truthful send outcomes: recorded SDK error shapes, never a provider call.
+jest.mock('../server/node_modules/twilio', () => {
+  const real = jest.requireActual('../server/node_modules/twilio');
+  const client = () => ({ messages: { create: async params => {
+    if (params.body === 'The destination rejected this test message.') throw Object.assign(new Error('Invalid To phone number'), {status:400,code:21211});
+    throw Object.assign(new Error('Connection ended before a response'), {code:'ETIMEDOUT'});
+  } } });
+  return Object.assign(client, real);
+});
+
 const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
@@ -531,5 +541,49 @@ describe('on this machine', () => {
     expect(localAuthHeaders(new URL(`http://127.0.0.1:${port}/token`))).toHaveProperty(
       'Authorization'
     );
+  });
+});
+
+// Accepted TWP-9 piece 3: sender metadata and confirmed local-history clearing
+// must share TWP-7's authenticated private boundary, never a browser fallback.
+describe('workspace private routes', () => {
+  it('denies sender metadata and clearing through a tunnel, including a stolen local key', async () => {
+    const before = storedMessages();
+    for (const headers of [{}, {Authorization:`Bearer ${fs.readFileSync(keyPath,'utf8').trim()}`}]) {
+      const me = await request(tunnelPort, {path:'/me',headers});
+      const clear = await request(tunnelPort, {path:'/sms/clear',method:'POST',headers:{...json,...headers},body:JSON.stringify({number:FICTIONAL_NUMBER})});
+      expect(me.status).toBe(403);expect(clear.status).toBe(403);
+    }
+    expect(storedMessages()).toEqual(before);
+  });
+
+  it('requires the local key and clears only the requested local conversation through the broker', async () => {
+    const before = storedMessages();
+    const untrusted = await request(port, {path:'/sms/clear',method:'POST',headers:{...json,Origin:'https://attacker.example'},body:JSON.stringify({number:FICTIONAL_NUMBER})});
+    const noKey = await request(port,{path:'/me'});
+    expect(untrusted.status).toBe(401);expect(noKey.status).toBe(401);
+    expect(storedMessages()).toEqual(before);
+    const me = await smsBroker.getMe();
+    expect(me).toMatchObject({callerId:ENV.TWILIO_CALLER_ID,smsFrom:ENV.TWILIO_CALLER_ID});
+    const clear = await smsBroker.clearConversation(FICTIONAL_NUMBER);
+    expect(clear.cleared).toBe(true);
+    expect(storedMessages()[FICTIONAL_NUMBER].messages).toEqual([]);
+    for (const number of Object.keys(before).filter(n=>n!==FICTIONAL_NUMBER)) expect(storedMessages()[number]).toEqual(before[number]);
+  });
+});
+
+// The provider's 4xx proves rejection; a transport error does not prove non-delivery.
+describe('truthful outbound outcomes', () => {
+  it('persists confirmed failure separately from an unknown send result', async () => {
+    const headers={...json,Authorization:`Bearer ${fs.readFileSync(keyPath,'utf8').trim()}`};
+    const responses=[];
+    for (const [body,outcome] of [['The destination rejected this test message.','failed'],['Please confirm tomorrow’s meeting.','unknown']]) {
+      const res=await request(port,{path:'/sms/send',method:'POST',headers,body:JSON.stringify({to:'+12025550101',body})});
+      expect(res.status).toBe(502);expect(JSON.parse(res.body).status).toBe(outcome);
+      const messages=storedMessages()['+12025550101'].messages;
+      expect(messages[messages.length-1]).toMatchObject({body,status:outcome});
+      responses.push({response:JSON.parse(res.body),persistedStatus:messages[messages.length-1].status});
+    }
+    console.log('Workspace API send-outcome proof:',JSON.stringify(responses));
   });
 });
