@@ -12,6 +12,22 @@ const secrets = require('./main/services/secrets');
 const config = require('./main/services/config');
 const tokenBroker = require('./main/services/tokenBroker');
 const smsBroker = require('./main/services/smsBroker');
+const sessionStatus = require('./main/services/session');
+
+// Where the development renderer lives. `npm run phone` passes its React
+// address; only a dev server on this machine is accepted, since the page
+// gets the preload bridge.
+function rendererUrl() {
+  const fallback = 'http://localhost:3000';
+  try {
+    const url = new URL(process.env.OPERATOR_RENDERER_URL || fallback);
+    const local = ['localhost', '127.0.0.1'].includes(url.hostname);
+    return url.protocol === 'http:' && local ? url.origin : fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+const RENDERER_URL = rendererUrl();
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -29,8 +45,19 @@ function createWindow() {
     },
   });
 
+  // `npm run phone` waits for these lines before it reports the app open.
+  win.webContents.once('did-finish-load', () => {
+    console.log('[operator] window ready');
+  });
+  win.webContents.on('did-fail-load', (_e, code, description, url, isMainFrame) => {
+    // -3 is an aborted load (a newer navigation replaced it), not a failure.
+    if (isMainFrame && code !== -3) {
+      console.log(`[operator] window failed to load ${url}: ${description}`);
+    }
+  });
+
   if (isDev) {
-    win.loadURL('http://localhost:3000');
+    win.loadURL(RENDERER_URL);
     win.webContents.openDevTools({ mode: 'detach' });
   } else {
     win.loadURL(`file://${path.join(__dirname, 'build', 'index.html')}`);
@@ -44,7 +71,7 @@ function createWindow() {
   });
   win.webContents.on('will-navigate', (event, url) => {
     const allowed = isDev
-      ? url.startsWith('http://localhost:3000')
+      ? url.startsWith(RENDERER_URL + '/') || url === RENDERER_URL
       : url.startsWith('file://');
     if (!allowed) {
       event.preventDefault();
@@ -159,6 +186,15 @@ function registerIpc() {
     }
   });
 
+  // Local service and tunnel status (see main/services/session.js).
+  ipcMain.handle('session:status', async () => {
+    try {
+      return { ok: true, ...(await sessionStatus.readStatus()) };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
   // App shell
   ipcMain.handle('app:platform', () => process.platform);
   ipcMain.handle('app:version', () => app.getVersion());
@@ -189,19 +225,36 @@ function registerIpc() {
   });
 }
 
-app.whenReady().then(() => {
-  registerIpc();
-  createWindow();
-});
+function focusWindow() {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
+// One running copy per profile: a second launch brings the open window to
+// the front instead of becoming a second writer of the same saved data.
+if (!app.requestSingleInstanceLock()) {
+  console.log('[operator] already open: focusing the existing window');
+  app.quit();
+} else {
+  app.on('second-instance', focusWindow);
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
+  app.whenReady().then(() => {
+    registerIpc();
     createWindow();
-  }
-});
+  });
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') {
+      app.quit();
+    }
+  });
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
+  });
+}

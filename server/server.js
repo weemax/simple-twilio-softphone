@@ -28,6 +28,10 @@ if (require.main === module) {
 
 // Optional:
 //   PORT                   — default 5050
+//   OPERATOR_LAUNCH_ID     — set by `npm run phone` (launcher/supervisor.js);
+//                            /health echoes it so the launcher can tell this
+//                            service, reached directly or through the tunnel,
+//                            from any other program on the port
 //
 // The renderer asks main for a token via `window.operator.token.fetch(identity)`,
 // main posts to this server's /token, this server signs the JWT and returns
@@ -47,6 +51,10 @@ const {
 
 const PORT = parseInt(process.env.PORT || '5050', 10);
 const HOST = process.env.HOST || '127.0.0.1';
+// A random, per-launch id, not a secret: it only identifies this run.
+const LAUNCH_ID = /^[A-Za-z0-9_-]{1,64}$/.test(process.env.OPERATOR_LAUNCH_ID || '')
+  ? process.env.OPERATOR_LAUNCH_ID
+  : null;
 
 const {
   TWILIO_ACCOUNT_SID,
@@ -354,7 +362,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && url === '/health') {
-    return send(res, 200, { ok: true, ts: Date.now() });
+    return send(res, 200, { ok: true, ts: Date.now(), ...(LAUNCH_ID ? { launch: LAUNCH_ID } : {}) });
   }
 
   if (url === '/me') {

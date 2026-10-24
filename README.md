@@ -31,7 +31,8 @@ This project is a fork of Kevin Whinnery's abandoned [operator](https://github.c
 | Contacts and reviewed CSV import | implemented locally; duplicate numbers never overwrite existing contacts |
 | Recent/missed call history | implemented for calls this app observes, not account-wide or closed-app history |
 | SMS: read receipts, typing indicators, group threads | out of scope |
-| Photos (US/Canada), manual contact queue, one-command startup and reviewed Twilio setup | accepted as separate implementation pieces; see `docs/phone-ux-plan.md` |
+| One-command startup (`npm run phone`) | working — starts the local service, React, ngrok and the desktop app, waits for each to answer, and stops only what it started; see Quick start |
+| Photos (US/Canada), manual contact queue and reviewed Twilio setup | accepted as separate implementation pieces; see `docs/phone-ux-plan.md` |
 | Phone number management UI | not implemented (planned) |
 | Private routes (`/token`, `/sms/send`, `/sms/conversations`) closed to the tunnel | working — tunneled requests get 403; the app's main process uses a per-start local API key |
 | Twilio webhook signature verification (`/twiml`, `/sms/inbound`, `/sms/status`) | working — requests without a valid Twilio signature over the exact public URL get 403; **requires `TWILIO_AUTH_TOKEN` and `PUBLIC_BASE_URL` in `server/.env`**, without which every webhook is refused (see `server/README.md`) |
@@ -41,41 +42,78 @@ For the full handoff doc with file map, IPC contract, call flow, environment var
 
 ## Quick start
 
-Three processes: a local Node service, a React dev server, and the Electron app. Open three terminals at the project root.
+One-time setup, at the project root:
 
 ```bash
-# 1. Install
 npm install
-cd server && npm install && cp .env.example .env
+npm install --prefix server
+cp server/.env.example server/.env
 # Edit server/.env with values from console.twilio.com — see server/README.md
-cd ..
-
-# 2. Token server (port 5050)
-npm run token-server
-
-# 3. React dev server (port 3000)
-npm run dev
-
-# 4. Electron
-npm start
 ```
 
-Or combine 1+2: `npm run dev:all`
+Install [ngrok](https://ngrok.com/download) and sign in once with
+`ngrok config add-authtoken <your authtoken>`. ngrok assigns your account's dev
+domain automatically; you never type it.
 
-For Twilio to reach your local webhook endpoints (both `/twiml` for voice and `/sms/inbound` for SMS), run an ngrok tunnel:
+Each session:
 
 ```bash
-ngrok http --domain=YOUR-RESERVED-DOMAIN.ngrok-free.app 5050
+npm run phone
 ```
 
-Put the tunnel's address and your Auth Token in `server/.env`, then restart the token server:
+This one command starts the local service (port 5050, or `PORT` in `server/.env`),
+the React dev server (port 3000), ngrok and the Operator desktop app. It waits until
+each part actually answers, not for a fixed time, then prints a summary:
+
+```
+[phone] Operator is ready.
+  Local service   http://127.0.0.1:5050 (answering)
+  Public tunnel   https://your-dev-domain.ngrok-free.app (reaches the local service)
+  React           http://localhost:3000
+  Desktop app     open
+```
+
+- It reads the address ngrok assigned from that ngrok's local status, checks that the
+  address reaches this local service, and gives it to the service for Twilio's
+  signatures and delivery updates, so `PUBLIC_BASE_URL` in `server/.env` is not needed.
+  The URLs in the Twilio console must use that address (see below); the reviewed
+  in-app Twilio setup piece will update them for you.
+- If ngrok is missing, not signed in or already running elsewhere, the app still
+  opens: contacts, message history and sending texts work, and the app says why the
+  tunnel is unavailable and that calls, incoming texts and delivery updates need it.
+- It starts nothing when packages or required `server/.env` settings are missing,
+  when a port is in use, or when an earlier run left processes behind, and names the
+  fix. It never stops a program it did not start. `npm run phone -- --react-port 3001`
+  and `--service-port 5051` choose other ports.
+- A second `npm run phone` in the same project starts nothing, and a second Operator
+  window brings the first to the front, so there is never a second writer.
+- Quitting Operator, or Ctrl+C in that terminal, stops everything the command started,
+  including their helper processes, and nothing else. `npm run phone -- --stop` does
+  the same from another terminal, or stops what an earlier run left behind.
+
+Settings → Connection shows the local service, the public tunnel, voice registration,
+message updates, the SMS sender and the Twilio account separately.
+
+### Starting the parts separately
+
+The low-level scripts remain, one terminal each: `npm run token-server` (port 5050),
+`npm run dev` (port 3000) and `npm start` (Electron), or `npm run dev:all` for the
+first two. Then start ngrok yourself:
+
+```bash
+ngrok http 5050
+```
+
+Put the address it prints and your Auth Token in `server/.env`, then restart the token server:
 
 ```env
-PUBLIC_BASE_URL=https://YOUR-RESERVED-DOMAIN.ngrok-free.app
+PUBLIC_BASE_URL=https://YOUR-DEV-DOMAIN.ngrok-free.app
 TWILIO_AUTH_TOKEN=your_auth_token_here
 ```
 
-Then configure the URLs in the Twilio console, starting with exactly that address — full walkthroughs in `HANDOFF.md` §3 (voice) and §3b/§3c (SMS). Only the webhook paths and `/health` answer through the tunnel; the private routes refuse tunneled requests, and the webhooks refuse any request Twilio did not sign.
+Started this way, Settings → Connection says the tunnel was not checked.
+
+Either way, the URLs in the Twilio console must start with exactly the tunnel's address — full walkthroughs in `HANDOFF.md` §3 (voice) and §3b/§3c (SMS). Only the webhook paths and `/health` answer through the tunnel; the private routes refuse tunneled requests, and the webhooks refuse any request Twilio did not sign.
 
 ## Daily workspace
 
@@ -118,6 +156,10 @@ npm ci --prefix server
 CI=true npm test -- --watchAll=false --runInBand
 CI=true npm run build
 ```
+
+`src/launcher.test.js` runs `npm run phone`'s launcher against the real local service
+and stand-in React, Electron and ngrok processes (`launcher/test-fakes/`); it never
+opens a real tunnel or contacts ngrok or Twilio.
 
 The workspace's isolated browser and actual Electron journeys use fictional data,
 a fake provider boundary and disposable profiles, never a live account. See
